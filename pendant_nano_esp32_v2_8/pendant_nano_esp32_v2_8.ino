@@ -1,7 +1,7 @@
 /**
  * =====================================================
- * CNC Pendant — Arduino Nano ESP32
- * v2.6 — FluidNC Native Protokol
+ *  CNC Pendant — Arduino Nano ESP32
+ *  v2.8 — Layout düzeltildi
  * =====================================================
  *
  * FluidNC config.yaml:
@@ -20,18 +20,18 @@
  * │ ENCODER                                         │
  * │   CLK (OutA) ── D2                              │
  * │   DT  (OutB) ── D3                              │
- * │   SW         ── D12 (opsiyonel)                 │
+ * │   SW         ── D12  (opsiyonel)                │
  * │   GND        ── GND                             │
  * │                                                 │
- * │ BUTONLAR (aktif LOW, dahili pull-up)            │
+ * │ BUTONLAR (aktif LOW, dahili pull-up)             │
  * │   HOME       ── D4                              │
  * │   ZERO       ── D5                              │
  * │   EKSEN      ── A6                              │
  * │   HIZ/STEP   ── A7                              │
  * │                                                 │
  * │ ST7789 1.9" TFT                                 │
- * │   SCL/SCK    ── D13 (otomatik)                  │
- * │   SDA/MOSI   ── D11 (otomatik)                  │
+ * │   SCL/SCK    ── D13  (otomatik)                 │
+ * │   SDA/MOSI   ── D11  (otomatik)                 │
  * │   CS         ── D10                             │
  * │   DC         ── D6                              │
  * │   RES/RST    ── D7                              │
@@ -55,93 +55,92 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 
-// ─── PIN TANIMLARI ────────────────────────────────────────────────────────────
 
+// ─── PIN TANIMLARI ────────────────────────────────────
+// Arduino Nano ESP32 — D numaraları kullanılır
 // Encoder
-#define ENC_CLK  D2   // GPIO5
-#define ENC_DT   D3   // GPIO6
-#define ENC_SW   D12  // GPIO47 (opsiyonel)
+#define ENC_CLK    D2    // GPIO5
+#define ENC_DT     D3    // GPIO6
+#define ENC_SW     D12   // GPIO47 (opsiyonel)
 
-// Butonlar (aktif LOW, dahili pull-up)
-#define BTN_HOME  D4  // GPIO7
-#define BTN_ZERO  D5  // GPIO8
-#define BTN_AXIS  A6  // GPIO13
-#define BTN_SPEED A7  // GPIO14
+// Butonlar
+#define BTN_HOME   D4    // GPIO7
+#define BTN_ZERO   D5    // GPIO8
+#define BTN_AXIS   A6    // GPIO13
+#define BTN_SPEED  A7    // GPIO14
 
 // TFT ST7789 (SPI)
 // SCK  → D13 (GPIO48) — otomatik
 // MOSI → D11 (GPIO38) — otomatik
-#define TFT_CS  D10  // GPIO21
-#define TFT_DC  D6   // GPIO9  (D8/D9 Serial1 için ayrıldı)
-#define TFT_RST D7   // GPIO10
+#define TFT_CS     D10   // GPIO21
+#define TFT_DC     D6    // GPIO9  (D8/D9 Serial1 için ayrıldı)
+#define TFT_RST    D7    // GPIO10
 
-// ─── TFT ──────────────────────────────────────────────────────────────────────
-
+// ─── TFT ──────────────────────────────────────────────
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
+#define TFT_W  320
+#define TFT_H  170
 
-#define TFT_W 320
-#define TFT_H 170
+// ─── RENKLER RGB565 ───────────────────────────────────
+#define C_BG      0x0000
+#define C_WHITE   0xFFFF
+#define C_CYAN    0x07FF
+#define C_GREEN   0x07E0
+#define C_RED     0xF800
+#define C_YELLOW  0xFFE0
+#define C_ORANGE  0xFD20
+#define C_GRAY    0x4208
+#define C_PANEL   0x1082
+#define C_ROWHL   0x0841
 
-// ─── RENKLER RGB565 ───────────────────────────────────────────────────────────
-
-#define C_BG     0x0000
-#define C_WHITE  0xFFFF
-#define C_CYAN   0x07FF
-#define C_GREEN  0x07E0
-#define C_RED    0xF800
-#define C_YELLOW 0xFFE0
-#define C_ORANGE 0xFD20
-#define C_GRAY   0x4208
-#define C_PANEL  0x1082
-#define C_ROWHL  0x0841
-
-// ─── FLUIDNC UART ─────────────────────────────────────────────────────────────
+// ─── FLUIDNC UART ─────────────────────────────────────
 // Serial1 Nano ESP32'de D9(RX1) ve D8(TX1) kullanır
 // D9 (RX1) ← ESP32S3 GPIO38 (TX)
 // D8 (TX1) → ESP32S3 GPIO39 (RX)
-
 #define FLUIDNC  Serial1
 #define FC_BAUD  115200
 
-// ─── MAKİNA DURUMU ────────────────────────────────────────────────────────────
-
+// ─── MAKİNA DURUMU ────────────────────────────────────
 struct Status {
-  float   x, y, z;
+  float   x;      // MPos
+  float   y;
+  float   z;
+  float   wco_x;  // Work Coordinate Offset
+  float   wco_y;
+  float   wco_z;
   float   feed;
   uint8_t state;
   bool    homed;
 };
 
-Status cur  = { 0, 0, 0, 0, 0, false };
-Status prev = { 0, 0, 0, 0, 0, false };
+Status cur  = { 0, 0, 0, 0, 0, 0, 0, 0, false };
+Status prev = { 0, 0, 0, 0, 0, 0, 0, 0, false };
 
-// ─── PENDANT AYARLARI ─────────────────────────────────────────────────────────
-
-static const char*   AXIS_STR[] = { "X", "Y", "Z" };
+// ─── PENDANT AYARLARI ─────────────────────────────────
+static const char* AXIS_STR[] = { "X", "Y", "Z" };
 uint8_t selAxis = 0;
 
-static const float   STEP_VAL[] = { 0.001f, 0.01f, 0.1f, 1.0f, 10.0f };
-static const char*   STEP_STR[] = { "0.001", "0.010", "0.100", "1.000", "10.00" };
-static const uint8_t N_STEPS    = 5;
+static const float  STEP_VAL[] = { 0.001f, 0.01f, 0.1f, 1.0f, 10.0f };
+static const char*  STEP_STR[] = { "0.001", "0.010", "0.100", "1.000", "10.00" };
+static const uint8_t N_STEPS   = 5;
 uint8_t selStep = 2;
 
-static const float   FEED_VAL[] = { 100.0f, 500.0f, 1000.0f, 3000.0f };
-static const char*   FEED_STR[] = { "100", "500", "1000", "3000" };
-static const uint8_t N_FEEDS    = 4;
+static const float  FEED_VAL[] = { 100.0f, 500.0f, 1000.0f, 3000.0f };
+static const char*  FEED_STR[] = { "100", "500", "1000", "3000" };
+static const uint8_t N_FEEDS   = 4;
 uint8_t selFeed = 2;
 
 bool needRedraw = true;
 
-// ─── FLUIDNC PARSE DEĞİŞKENLERİ ──────────────────────────────────────────────
+// ─── FLUIDNC PARSE ────────────────────────────────────
+String fcLine   = "";
+bool   fcInPkt  = false;
 
-String fcLine  = "";
-bool   fcInPkt = false;
-
+// Jog throttle
 unsigned long lastJog = 0;
 #define JOG_THROTTLE_MS 60
 
-// ─── ENCODER ──────────────────────────────────────────────────────────────────
-
+// ─── ENCODER ──────────────────────────────────────────
 volatile int encDelta   = 0;
 volatile int lastClkVal = HIGH;
 
@@ -154,8 +153,7 @@ void IRAM_ATTR encISR() {
   }
 }
 
-// ─── BUTON DEBOUNCE ───────────────────────────────────────────────────────────
-
+// ─── BUTON DEBOUNCE ───────────────────────────────────
 struct Btn {
   uint8_t       pin;
   bool          lastState;
@@ -169,7 +167,6 @@ Btn btns[4] = {
   { BTN_AXIS,  HIGH, false, 0 },
   { BTN_SPEED, HIGH, false, 0 }
 };
-
 #define DEBOUNCE_MS 50
 
 void readBtns() {
@@ -183,8 +180,7 @@ void readBtns() {
   }
 }
 
-// ─── FLUIDNC KOMUTLAR ─────────────────────────────────────────────────────────
-
+// ─── FLUIDNC KOMUTLAR ─────────────────────────────────
 void fcSend(const char* cmd) {
   FLUIDNC.println(cmd);
 }
@@ -192,29 +188,25 @@ void fcSend(const char* cmd) {
 void fcJog(uint8_t axis, int8_t dir, float dist, float feed) {
   char buf[48];
   char axCh = (axis == 0) ? 'X' : (axis == 1) ? 'Y' : 'Z';
-  snprintf(buf, sizeof(buf), "$J=G91 G21 %c%.4f F%.0f", axCh, dist * dir, feed);
+  snprintf(buf, sizeof(buf), "$J=G91 G21 %c%.4f F%.0f",
+           axCh, dist * dir, feed);
   fcSend(buf);
 }
 
 void fcJogCancel() {
-  FLUIDNC.write(0x85);  // FluidNC real-time jog cancel
+  FLUIDNC.write(0x85);  // FluidNC real-time jog cancel komutu
 }
 
-void fcHome() {
-  fcSend("$H");
-}
-
-void fcZero(uint8_t ax) {
+void fcHome()            { fcSend("$H"); }
+void fcZero(uint8_t ax)  {
   const char* cmds[] = { "G92 X0", "G92 Y0", "G92 Z0" };
   fcSend(cmds[ax]);
 }
 
-// ─── FLUIDNC STATUS PARSE ─────────────────────────────────────────────────────
-// Örnek çıktı:
-// <Idle|MPos:10.000,-5.000,0.000|FS:0,0|WCO:0.000,0.000,0.000>
-
+// ─── FLUIDNC PARSE ────────────────────────────────────
+// FluidNC uart_channel çıktısı örneği:
+//   <Idle|MPos:10.000,-5.000,0.000|FS:0,0|WCO:0.000,0.000,0.000>
 void parseStatus(const String& s) {
-
   // State
   if      (s.startsWith("Idle"))  cur.state = 0;
   else if (s.startsWith("Run"))   cur.state = 1;
@@ -241,6 +233,20 @@ void parseStatus(const String& s) {
   // FS: feed,spindle
   idx = s.indexOf("FS:");
   if (idx >= 0) cur.feed = s.substring(idx + 3).toFloat();
+
+  // WCO: Work Coordinate Offset (ara sıra gelir, son değeri sakla)
+  idx = s.indexOf("WCO:");
+  if (idx >= 0) {
+    String w  = s.substring(idx + 4);
+    int    c1 = w.indexOf(',');
+    int    c2 = w.indexOf(',', c1 + 1);
+    int    e  = w.indexOf('|');
+    if (c1 > 0 && c2 > c1) {
+      cur.wco_x = w.substring(0, c1).toFloat();
+      cur.wco_y = w.substring(c1 + 1, c2).toFloat();
+      cur.wco_z = w.substring(c2 + 1, e > 0 ? e : (int)w.length()).toFloat();
+    }
+  }
 }
 
 void readFluidNC() {
@@ -259,107 +265,107 @@ void readFluidNC() {
   }
 }
 
-// ─── EKRAN YARDIMCI FONKSİYONLAR ─────────────────────────────────────────────
-
+// ─── EKRAN ────────────────────────────────────────────
 static uint16_t stateColor(uint8_t s) {
-  switch (s) {
-    case 0:  return C_GREEN;
-    case 1:  return C_CYAN;
-    case 2:  return C_YELLOW;
-    case 3:  return C_RED;
-    case 4:  return C_ORANGE;
-    case 5:  return C_CYAN;
-    case 6:  return C_RED;
-    default: return C_GRAY;
+  switch(s) {
+    case 0: return C_GREEN;
+    case 1: return C_CYAN;
+    case 2: return C_YELLOW;
+    case 3: return C_RED;
+    case 4: return C_ORANGE;
+    case 5: return C_CYAN;
+    case 6: return C_RED;
+    default:return C_GRAY;
   }
 }
 
 static const char* stateStr(uint8_t s) {
-  switch (s) {
-    case 0:  return "IDLE ";
-    case 1:  return "RUN  ";
-    case 2:  return "HOLD ";
-    case 3:  return "ALARM";
-    case 4:  return "HOME ";
-    case 5:  return "JOG  ";
-    case 6:  return "DOOR ";
-    default: return "?????";
+  switch(s) {
+    case 0: return "IDLE ";
+    case 1: return "RUN  ";
+    case 2: return "HOLD ";
+    case 3: return "ALARM";
+    case 4: return "HOME ";
+    case 5: return "JOG  ";
+    case 6: return "DOOR ";
+    default:return "?????";
   }
 }
 
-// ─── EKRAN ÇİZİM FONKSİYONLARI ───────────────────────────────────────────────
-
 void drawHeader() {
-  tft.fillRect(0, 0, TFT_W, 22, C_PANEL);
+  tft.fillRect(0, 0, TFT_W, 19, C_PANEL);
+
   tft.setTextSize(1);
-
-  // Durum
   tft.setTextColor(stateColor(cur.state));
-  tft.setCursor(4, 7);
-  tft.print("[");
-  tft.print(stateStr(cur.state));
-  tft.print("]");
+  tft.setCursor(4, 5);
+  tft.print("["); tft.print(stateStr(cur.state)); tft.print("]");
 
-  // Başlık
   tft.setTextColor(C_CYAN);
-  tft.setCursor(80, 7);
+  tft.setCursor(80, 5);
   tft.print("CNC PENDANT");
 
-  // Home durumu
   tft.setTextColor(cur.homed ? C_GREEN : C_RED);
-  tft.setCursor(190, 7);
+  tft.setCursor(190, 5);
   tft.print(cur.homed ? "[ HOMED ]" : "[NO HOME]");
 
-  // Seçili eksen
-  tft.fillRect(286, 1, 32, 20, C_ROWHL);
+  tft.fillRect(286, 1, 32, 17, C_ROWHL);
   tft.setTextColor(C_YELLOW);
-  tft.setCursor(288, 7);
+  tft.setCursor(288, 5);
   tft.print(AXIS_STR[selAxis]);
 }
 
 void drawAxisRows() {
-  const float vals[3] = { cur.x, cur.y, cur.z };
-  char buf[14];
+  // WPos = MPos - WCO
+  const float mpos[3] = { cur.x, cur.y, cur.z };
+  const float wpos[3] = {
+    cur.x - cur.wco_x,
+    cur.y - cur.wco_y,
+    cur.z - cur.wco_z
+  };
+  char buf[12];
 
   for (int i = 0; i < 3; i++) {
-    int  y0     = 23 + i * 34;
-    bool active = (i == (int)selAxis);
+    int     y0     = 30 + i * 38;
+    bool    active = (i == (int)selAxis);
+    uint16_t bg    = active ? C_ROWHL : C_BG;
 
-    tft.fillRect(0, y0, TFT_W, 34, active ? C_ROWHL : C_BG);
+    tft.fillRect(0, y0, TFT_W, 38, bg);
 
     // Eksen etiketi
     tft.setTextSize(2);
     tft.setTextColor(active ? C_YELLOW : C_GRAY);
-    tft.setCursor(4, y0 + 8);
+    tft.setCursor(2, y0 + 11);
     tft.print(AXIS_STR[i]);
-    tft.print(":");
 
-    // Koordinat
-    snprintf(buf, sizeof(buf), "%+9.3f", vals[i]);
+    // MPos — sol sütun (beyaz/sarı)
+    snprintf(buf, sizeof(buf), "%+8.3f", mpos[i]);
     tft.setTextColor(active ? C_YELLOW : C_WHITE);
-    tft.setCursor(34, y0 + 8);
+    tft.setCursor(22, y0 + 11);
     tft.print(buf);
 
-    // Birim
-    tft.setTextSize(1);
-    tft.setTextColor(C_GRAY);
-    tft.setCursor(34 + 9 * 12, y0 + 14);
-    tft.print("mm");
+    // Dikey ayraç
+    tft.drawFastVLine(158, y0 + 1, 36, C_GRAY);
+
+    // WPos — sağ sütun (yeşil)
+    snprintf(buf, sizeof(buf), "%+8.3f", wpos[i]);
+    tft.setTextColor(active ? C_YELLOW : C_GREEN);
+    tft.setCursor(162, y0 + 11);
+    tft.print(buf);
   }
 }
 
 void drawFooter() {
-  int y0 = 125;
+  int y0 = 144;
   tft.fillRect(0, y0, TFT_W, TFT_H - y0, C_PANEL);
   tft.drawFastHLine(0, y0, TFT_W, C_GRAY);
+
   tft.setTextSize(1);
 
   // Gerçek feed
   tft.setTextColor(C_ORANGE);
   tft.setCursor(4, y0 + 5);
   tft.print("F:");
-  char fb[8];
-  snprintf(fb, sizeof(fb), "%.0f", cur.feed);
+  char fb[8]; snprintf(fb, sizeof(fb), "%.0f", cur.feed);
   tft.print(fb);
   tft.print("mm/dk");
 
@@ -384,9 +390,17 @@ void drawFooter() {
 
 void drawAll() {
   tft.fillScreen(C_BG);
-  tft.drawFastHLine(0,  22, TFT_W, C_GRAY);
-  tft.drawFastHLine(0, 125, TFT_W, C_GRAY);
+  tft.drawFastHLine(0, 19,  TFT_W, C_GRAY);
+  tft.drawFastHLine(0, 144, TFT_W, C_GRAY);
   drawHeader();
+  // Sütun başlıkları — header altında
+  tft.fillRect(0, 19, TFT_W, 11, C_PANEL);
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(40,  21); tft.print("  MACHINE POS");
+  tft.setCursor(185, 21); tft.print("   WORK POS");
+  tft.drawFastHLine(0, 30, TFT_W, C_GRAY);
+  tft.drawFastVLine(158, 19, 125, C_GRAY);
   drawAxisRows();
   drawFooter();
   needRedraw = false;
@@ -394,19 +408,14 @@ void drawAll() {
 }
 
 void updateDisplay() {
-  if (needRedraw) {
-    drawAll();
-    return;
-  }
-
-  bool posChg   = (cur.x != prev.x || cur.y != prev.y || cur.z != prev.z);
-  bool stateChg = (cur.state != prev.state || cur.homed != prev.homed);
-  bool feedChg  = (cur.feed != prev.feed);
-
-  if (posChg)   drawAxisRows();
-  if (stateChg) { drawHeader(); drawFooter(); }
-  if (feedChg)  drawFooter();
-
+  if (needRedraw) { drawAll(); return; }
+  bool posChg   = cur.x != prev.x || cur.y != prev.y || cur.z != prev.z ||
+                  cur.wco_x != prev.wco_x || cur.wco_y != prev.wco_y || cur.wco_z != prev.wco_z;
+  bool stateChg = cur.state != prev.state || cur.homed != prev.homed;
+  bool feedChg  = cur.feed  != prev.feed;
+  if (posChg)              drawAxisRows();
+  if (stateChg)            { drawHeader(); drawFooter(); needRedraw = true; }
+  if (feedChg)             drawFooter();
   prev = cur;
 }
 
@@ -421,10 +430,8 @@ void popup(const char* msg, uint16_t bgCol, uint32_t dur_ms) {
   needRedraw = true;
 }
 
-// ─── SETUP ────────────────────────────────────────────────────────────────────
-
+// ─── SETUP ────────────────────────────────────────────
 void setup() {
-  // Encoder
   pinMode(ENC_CLK, INPUT_PULLUP);
   pinMode(ENC_DT,  INPUT_PULLUP);
   pinMode(ENC_SW,  INPUT_PULLUP);
@@ -432,39 +439,28 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENC_CLK), encISR, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC_DT),  encISR, CHANGE);
 
-  // Butonlar
   for (int i = 0; i < 4; i++) pinMode(btns[i].pin, INPUT_PULLUP);
 
-  // TFT
   tft.init(TFT_H, TFT_W);
   tft.setRotation(1);
   tft.fillScreen(C_BG);
   tft.setTextWrap(false);
 
-  // UART → FluidNC
   FLUIDNC.begin(FC_BAUD, SERIAL_8N1, D9, D8);  // D9=RX, D8=TX
 
-  // Splash ekranı
-  tft.setTextColor(C_CYAN);
-  tft.setTextSize(2);
-  tft.setCursor(60, 45);
-  tft.print("CNC PENDANT");
-
-  tft.setTextColor(C_GREEN);
-  tft.setTextSize(1);
-  tft.setCursor(72, 75);
-  tft.print("FluidNC uart_channel v2.6");
-
+  // Splash
+  tft.setTextColor(C_CYAN);  tft.setTextSize(2);
+  tft.setCursor(85, 45);  tft.print("CNC PENDANT");
+  tft.setTextColor(C_GREEN); tft.setTextSize(1);
+  tft.setCursor(85, 75);  tft.print("FluidNC Pendant v2.3");
   tft.setTextColor(C_GRAY);
-  tft.setCursor(70, 92);
-  tft.print("GPIO38->D9(RX) GPIO39<-D8(TX)");
-
+  tft.setCursor(100, 92);  tft.print("by VOLTveTORK");
   delay(2000);
+
   needRedraw = true;
 }
 
-// ─── LOOP ─────────────────────────────────────────────────────────────────────
-
+// ─── LOOP ─────────────────────────────────────────────
 void loop() {
 
   // 1. FluidNC'den gelen otomatik raporları oku
@@ -473,14 +469,14 @@ void loop() {
   // 2. Butonları oku
   readBtns();
 
-  // 3. HOME butonu
+  // 3. HOME
   if (btns[0].fired) {
     btns[0].fired = false;
     fcHome();
     popup("HOMING...", C_ORANGE, 300);
   }
 
-  // 4. ZERO butonu (aktif eksen)
+  // 4. ZERO (aktif eksen)
   if (btns[1].fired) {
     btns[1].fired = false;
     fcZero(selAxis);
@@ -492,14 +488,14 @@ void loop() {
     popup(msg, C_GREEN, 400);
   }
 
-  // 5. EKSEN SEÇ butonu
+  // 5. EKSEN SEÇ
   if (btns[2].fired) {
     btns[2].fired = false;
     selAxis = (selAxis + 1) % 3;
     needRedraw = true;
   }
 
-  // 6. STEP / FEED SEÇ butonu
+  // 6. STEP / FEED SEÇ
   if (btns[3].fired) {
     btns[3].fired = false;
     selStep = (selStep + 1) % N_STEPS;
@@ -510,19 +506,19 @@ void loop() {
   // 7. ENCODER JOG
   noInterrupts();
   int delta = encDelta;
-  encDelta = 0;
+  encDelta  = 0;
   interrupts();
 
   if (delta != 0) {
     uint32_t now = millis();
     if (now - lastJog >= JOG_THROTTLE_MS) {
       lastJog = now;
-      int8_t dir       = (delta > 0) ? 1 : -1;
-      float  totalDist = STEP_VAL[selStep] * abs(delta);
+      int8_t dir        = delta > 0 ? 1 : -1;
+      float  totalDist  = STEP_VAL[selStep] * abs(delta);
       fcJog(selAxis, dir, totalDist, FEED_VAL[selFeed]);
     }
   }
 
-  // 8. Ekranı güncelle
+  // 8. Ekran güncelle
   updateDisplay();
 }
