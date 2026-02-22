@@ -160,7 +160,7 @@ Son adımdan sonra jog hızı bir sonrakine geçer:
 
 ```
 CNC_Pendant/
-├── pendant_nano_esp32_v2.8.ino   # Ana pendant kodu (Nano ESP32)
+├── pendant_nano_esp32_v2.6       # Ana pendant kodu (Nano ESP32)
 ├── 3D Boyutlu Tasarım Dosyası    # Stl
 └── README.md                     # Bu dosya
 ```
