@@ -10,7 +10,7 @@
 
 ## 📸 Özellikler
 
-- ✅ FluidNC ile doğrudan UART haberleşmesi (bridge kodu gerekmez)
+- ✅ FluidNC ile doğrudan UART haberleşmesi
 - ✅ Gerçek zamanlı **Machine Position (MPos)**
 - ✅ Rotary encoder ile hassas jog kontrolü
 - ✅ 4 buton: HOME / ZERO / EKSEN / HIZ-STEP
