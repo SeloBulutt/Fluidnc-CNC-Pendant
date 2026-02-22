@@ -1,8 +1,6 @@
-# Fluidnc-CNC-Pendant v2.6
-
 # 🎛️ CNC Pendant for FluidNC
 
-**Arduino Nano ESP32 tabanlı (Herhangi bir işlemci olur), ST7789 TFT ekranlı, FluidNC uyumlu CNC kumanda paneli.**
+**Arduino Nano ESP32 tabanlı (farklı mikroişlemciler kullanabilirsiniz), ST7789 TFT ekranlı, FluidNC uyumlu CNC kumanda paneli.**
 
 > Tasarım & Geliştirme: **VOLTveTORK**
 
@@ -11,7 +9,7 @@
 ## 📸 Özellikler
 
 - ✅ FluidNC ile doğrudan UART haberleşmesi
-- ✅ Gerçek zamanlı **Machine Position (MPos)**
+- ✅ Gerçek zamanlı **Machine Position (MPos)** ve **Work Position (WPos)** gösterimi
 - ✅ Rotary encoder ile hassas jog kontrolü
 - ✅ 4 buton: HOME / ZERO / EKSEN / HIZ-STEP
 - ✅ 5 farklı jog adım boyutu: 0.001 / 0.01 / 0.1 / 1.0 / 10.0 mm
@@ -119,11 +117,13 @@ Adafruit GFX Library
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ [IDLE]    CNC PENDANT    [HOMED]               X    │          
+│ [IDLE]    CNC PENDANT    [HOMED]               X   │
+├──────────────────┬──────────────────────────────────┤
+│   MACHINE POS    │         WORK POS                 │
 ├──────────────────┼──────────────────────────────────┤
-│ X  +125.000      │                                  │
-│ Y   -45.500      │                                  │
-│ Z    +0.000      │                                  │
+│ X  +125.000      │  +25.000                         │
+│ Y   -45.500      │   -5.500   ← aktif eksen (sarı)  │
+│ Z    +0.000      │   +0.000                         │
 ├──────────────────┴──────────────────────────────────┤
 │ F:500mm/dk   STEP:0.100mm   JF:1000                 │
 └─────────────────────────────────────────────────────┘
@@ -160,9 +160,8 @@ Son adımdan sonra jog hızı bir sonrakine geçer:
 
 ```
 CNC_Pendant/
-├── pendant_nano_esp32_v2.6       # Ana pendant kodu (Nano ESP32)
-├── 3D Boyutlu Tasarım Dosyası    # Stl
-└── README.md                     # Bu dosya
+├── pendant_nano_esp32_v2.8.ino   # Ana pendant kodu (Nano ESP32)
+└── README.md                      # Bu dosya
 ```
 
 ---
@@ -170,7 +169,7 @@ CNC_Pendant/
 ## 🔌 Bağlantı Şeması
 
 ```
-Arduino Nano ESP32 (Herhangi bir işlemci olur)              FluidNC ESP32-S3
+Arduino Nano ESP32              FluidNC ESP32-S3
 ─────────────────────────────────────────────────
 D9  (RX1)  ←───────────────── GPIO38 (UART1 TX)
 D8  (TX1)  ───────────────────→ GPIO39 (UART1 RX)
@@ -199,4 +198,4 @@ Bu proje açık kaynaklıdır. Kişisel ve eğitim amaçlı serbestçe kullanıl
 
 **VOLTveTORK**
 
-İnstagram profili: https://www.instagram.com/voltvetork/
+FluidNC projesi: [github.com/bdring/FluidNC](https://github.com/bdring/FluidNC)
