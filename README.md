@@ -1,23 +1,36 @@
 # 🎛️ CNC Pendant for FluidNC
 
-**Arduino Nano ESP32 tabanlı( farklı mikroişlemci kullanabilirsiniz), ST7789 TFT ekranlı, FluidNC uyumlu CNC kumanda paneli.**
+**Arduino Nano ESP32 tabanlı (farklı mikroişlemci kullanabilirsiniz), ST7789 TFT ekranlı, FluidNC uyumlu CNC kumanda paneli.**
 
 > Tasarım & Geliştirme: **VOLTveTORK**
+> Sürüm: **v3.01** — Menu System + Spindle Gauge
 
 ---
 
 ## 📸 Özellikler
 
-- ✅ FluidNC ile doğrudan UART haberleşmesi
+- ✅ FluidNC ile doğrudan UART haberleşmesi (115200 baud)
 - ✅ Gerçek zamanlı **Machine Position (MPos)** ve **Work Position (WPos)** gösterimi
-- ✅ Rotary encoder ile hassas jog kontrolü
+- ✅ Rotary encoder ile hassas jog kontrolü (interrupt tabanlı, 60ms throttle)
 - ✅ 4 buton: HOME / ZERO / EKSEN / HIZ-STEP
-- ✅ 5 farklı jog adım boyutu: 0.001 / 0.01 / 0.1 / 1.0 / 10.0 mm
-- ✅ 4 farklı jog hızı: 100 / 500 / 1000 / 3000 mm/dk
+- ✅ Encoder kısa tıklama + uzun basma (500ms) desteği
 - ✅ X, Y, Z eksen seçimi
-- ✅ Durum göstergesi: IDLE / RUN / HOLD / ALARM / HOME / JOG
+- ✅ Durum göstergesi: IDLE / RUN / HOLD / ALARM / HOME / JOG / DOOR
 - ✅ Homed durumu takibi
 - ✅ Popup bildirimleri
+- ✅ 10 saniye hareketsizlikte menüden otomatik çıkış
+
+### 🆕 v3.01 — Menü Sistemi & Spindle Gauge
+
+- ✅ **Encoder tıklama ile menü erişimi** (ana ekranda tıkla → menüye gir)
+- ✅ **Spindle Kontrolü** — 270° analog gauge ile gerçek zamanlı RPM gösterimi
+  - Encoder ile hedef hız ayarı (500 RPM adımlarla, 0–20000 RPM)
+  - Renk kodlu ark: Yeşil (<7K) / Sarı (<14K) / Kırmızı (>14K)
+  - Tıklama ile M3/M5 komutu gönderimi
+- ✅ **Jog Hızı Seçimi** — 1000 / 2000 / 3000 mm/dk
+- ✅ **Step Boyutu Seçimi** — 0.100 / 0.500 / 1.000 mm
+- ✅ **Soğutma Kontrolü** — KAPALI (M9) / FLOOD (M8) / MIST (M7)
+- ✅ **Uzun basma ile geri dönüş** (alt menülerden üst menüye)
 
 ---
 
@@ -39,8 +52,10 @@
 |---|---|
 | CLK (Out A) | D2 |
 | DT (Out B) | D3 |
-| SW (Buton) | D12 |
+| SW (Buton) | A0 |
 | GND | GND |
+
+> ⚠️ **Not:** D12 (GPIO47) encoder SW için sorunlu olabilir, bu yüzden A0 pini kullanılmaktadır.
 
 ### Butonlar (Aktif LOW — dahili pull-up)
 | Buton | Nano ESP32 |
@@ -107,7 +122,7 @@ Adafruit GFX Library
 
 1. Arduino IDE'yi açın
 2. **Board**: `Arduino Nano ESP32` seçin
-3. `pendant_nano_esp32_v2.8.ino` dosyasını açın
+3. `pendant.ino` dosyasını açın
 4. Kütüphaneleri yükleyin
 5. **Upload** edin
 
@@ -115,6 +130,7 @@ Adafruit GFX Library
 
 ## 🖥️ Ekran Düzeni
 
+### Ana Ekran
 ```
 ┌─────────────────────────────────────────────────────┐
 │ [IDLE]    CNC PENDANT    [HOMED]               X   │
@@ -125,7 +141,39 @@ Adafruit GFX Library
 │ Y   -45.500      │   -5.500   ← aktif eksen (sarı)  │
 │ Z    +0.000      │   +0.000                         │
 ├──────────────────┴──────────────────────────────────┤
-│ F:500mm/dk   STEP:0.100mm   JF:1000                 │
+│ F:500  SPD:0  STEP:0.100  JF:2000                   │
+│ [HOME] [ZERO] [AXIS] [SPEED]  Tikla:Menu            │
+└─────────────────────────────────────────────────────┘
+```
+
+### Menü Ekranı
+```
+┌─────────────────────────────────────────────────────┐
+│              CNC MENU                               │
+├─────────────────────────────────────────────────────┤
+│  > Spindle Kontrolu                                 │
+│    Jog Hizi                                         │
+│    Step Boyutu                                      │
+│    Sogutma                                          │
+│    Geri Don                                         │
+├─────────────────────────────────────────────────────┤
+│  Encoder: Sec  |  Tikla: Gir                        │
+└─────────────────────────────────────────────────────┘
+```
+
+### Spindle Gauge Ekranı
+```
+┌─────────────────────────────────────────────────────┐
+│ SPINDLE KONTROLU                    [M3 AKTIF]      │
+├─────────────────────────┬───────────────────────────┤
+│                         │  HEDEF HIZ:               │
+│    ╭───270° gauge───╮   │     12000                 │
+│    │     12500       │   │      RPM                  │
+│    │      RPM        │   │                           │
+│    ╰────────────────╯   │   CALISIYOR               │
+│                         │                           │
+├─────────────────────────┴───────────────────────────┤
+│  Cevir: Hiz Ayarla  |  Tikla: M3 Gonder            │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -133,26 +181,64 @@ Adafruit GFX Library
 
 ## 🕹️ Kullanım
 
-### Jog (Encoder)
-Encoder'ı çevirerek seçili eksende seçili adım boyutunda hareket ettirin.
+### Ana Ekran Kontrolleri
 
-### Buton Fonksiyonları
-| Buton | Kısa Basış |
+| Kontrol | Fonksiyon |
 |---|---|
-| **HOME** | Tüm eksenleri home'la (`$H`) |
-| **ZERO** | Aktif ekseni sıfırla (G92) |
-| **EKSEN** | X → Y → Z → X döngüsü |
-| **HIZ/STEP** | Adım boyutunu büyüt; turdan sonra hızı artır |
+| **Encoder çevirme** | Seçili eksende jog hareketi |
+| **Encoder tıklama** | Menüye giriş |
+| **HOME butonu** | Tüm eksenleri home'la (`$H`) |
+| **ZERO butonu** | Aktif ekseni sıfırla (`G92`) |
+| **EKSEN butonu** | X → Y → Z → X döngüsü |
+| **HIZ/STEP butonu** | Adım boyutunu büyüt; turdan sonra hızı artır |
 
-### Jog Adım Seçimi
-`HIZ/STEP` butonuna her basışta adım büyür:
+### Menü Navigasyonu
+
+| Kontrol | Fonksiyon |
+|---|---|
+| **Encoder çevirme** | Menü öğeleri arasında gezinme |
+| **Encoder kısa tıklama** | Seçili öğeye gir / onayla |
+| **Encoder uzun basma (500ms)** | Üst menüye / ana ekrana geri dön |
+| **Herhangi bir buton** | Alt ekranlardan ana ekrana dön |
+| **10s hareketsizlik** | Otomatik ana ekrana dönüş |
+
+### Menü Öğeleri
+
+| Menü | Açıklama |
+|---|---|
+| **Spindle Kontrolü** | 270° gauge ile RPM gösterimi, encoder ile hedef hız ayarı (500 RPM adım), tıklama ile M3 S[hız] veya M5 gönderimi |
+| **Jog Hızı** | 1000 / 2000 / 3000 mm/dk arasında seçim |
+| **Step Boyutu** | 0.100 / 0.500 / 1.000 mm arasında seçim |
+| **Soğutma** | KAPALI (M9) / FLOOD (M8) / MIST (M7) kontrolü |
+| **Geri Dön** | Ana ekrana dönüş |
+
+### Jog Parametreleri
+
+**Adım Boyutları:**
 ```
-0.001 → 0.010 → 0.100 → 1.000 → 10.00 → (tekrar) 0.001
+0.100 → 0.500 → 1.000 mm
 ```
-Son adımdan sonra jog hızı bir sonrakine geçer:
+
+**Jog Hızları:**
 ```
-100 → 500 → 1000 → 3000 mm/dk
+1000 → 2000 → 3000 mm/dk
 ```
+
+> HIZ/STEP butonuna her basışta adım büyür. Son adımdan 0.100'e döndüğünde jog hızı bir sonraki kademeye geçer.
+
+---
+
+## 📡 Durum Göstergeleri
+
+| Durum | Renk | Açıklama |
+|---|---|---|
+| IDLE | 🟢 Yeşil | Makine boşta |
+| RUN | 🔵 Cyan | Program çalışıyor |
+| HOLD | 🟡 Sarı | Duraklatıldı |
+| ALARM | 🔴 Kırmızı | Alarm durumu |
+| HOME | 🟠 Turuncu | Homing işlemi |
+| JOG | 🔵 Cyan | Jog hareketi |
+| DOOR | 🔴 Kırmızı | Kapı açık |
 
 ---
 
@@ -160,8 +246,9 @@ Son adımdan sonra jog hızı bir sonrakine geçer:
 
 ```
 CNC_Pendant/
-├── pendant_nano_esp32_v2.8.ino   # Ana pendant kodu (Nano ESP32)
-└── README.md                      # Bu dosya
+├── pendant.ino         # Ana pendant kodu (v3.01)
+├── config.yaml         # FluidNC yapılandırma dosyası
+└── README.md           # Bu dosya
 ```
 
 ---
@@ -179,7 +266,7 @@ ST7789 TFT          EC11 Encoder        Butonlar
 ───────────         ────────────        ────────
 D13 ← SCK           D2 ← CLK           D4 ← HOME
 D11 ← MOSI          D3 ← DT            D5 ← ZERO
-D10 ← CS            D12 ← SW           A6 ← EKSEN
+D10 ← CS            A0 ← SW            A6 ← EKSEN
 D6  ← DC            GND ← GND          A7 ← HIZ
 D7  ← RST
 3V3 ← BLK/VCC
