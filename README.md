@@ -107,7 +107,7 @@ Adafruit GFX Library
 
 1. Arduino IDE'yi açın
 2. **Board**: `Arduino Nano ESP32` seçin
-3. `pendant_nano_esp32_v2.8.ino` dosyasını açın
+3. `pendant_nano_esp32_v3.0.ino` dosyasını açın
 4. Kütüphaneleri yükleyin
 5. **Upload** edin
 
