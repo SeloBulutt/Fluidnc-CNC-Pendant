@@ -1,7 +1,7 @@
 /**
  * =====================================================
  *  CNC Pendant — Arduino Nano ESP32
- *  v2.8 — Layout düzeltildi
+ *  v3.0 — Layout düzeltildi
  * =====================================================
  *
  * FluidNC config.yaml:
@@ -120,15 +120,15 @@ Status prev = { 0, 0, 0, 0, 0, 0, 0, 0, false };
 static const char* AXIS_STR[] = { "X", "Y", "Z" };
 uint8_t selAxis = 0;
 
-static const float  STEP_VAL[] = { 0.001f, 0.01f, 0.1f, 1.0f, 10.0f };
-static const char*  STEP_STR[] = { "0.001", "0.010", "0.100", "1.000", "10.00" };
-static const uint8_t N_STEPS   = 5;
-uint8_t selStep = 2;
+static const float  STEP_VAL[] = { 0.01f, 0.1f };
+static const char*  STEP_STR[] = { "0.010", "0.100" };
+static const uint8_t N_STEPS   = 2;
+uint8_t selStep = 1;
 
-static const float  FEED_VAL[] = { 100.0f, 500.0f, 1000.0f, 3000.0f };
-static const char*  FEED_STR[] = { "100", "500", "1000", "3000" };
-static const uint8_t N_FEEDS   = 4;
-uint8_t selFeed = 2;
+static const float  FEED_VAL[] = { 1000.0f, 2000.0f};
+static const char*  FEED_STR[] = { "1000", "2000" };
+static const uint8_t N_FEEDS   = 2;
+uint8_t selFeed = 1;
 
 bool needRedraw = true;
 
@@ -452,7 +452,7 @@ void setup() {
   tft.setTextColor(C_CYAN);  tft.setTextSize(2);
   tft.setCursor(85, 45);  tft.print("CNC PENDANT");
   tft.setTextColor(C_GREEN); tft.setTextSize(1);
-  tft.setCursor(85, 75);  tft.print("FluidNC Pendant v2.3");
+  tft.setCursor(85, 75);  tft.print("FluidNC Pendant v3.0");
   tft.setTextColor(C_GRAY);
   tft.setCursor(100, 92);  tft.print("by VOLTveTORK");
   delay(2000);
