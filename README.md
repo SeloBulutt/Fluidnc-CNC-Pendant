@@ -3,13 +3,14 @@
 **Arduino Nano ESP32 tabanlı (farklı mikroişlemci kullanabilirsiniz), ST7789 TFT ekranlı, FluidNC uyumlu CNC kumanda paneli.**
 
 > Tasarım & Geliştirme: **VOLTveTORK**
-> Sürüm: **v3.01** — Menu System + Spindle Gauge
+> Sürüm: **v4.01** — WiFi bağlantısı, Soft Reset ve Duraklama
 
 ---
 
 ## 📸 Özellikler
 
-- ✅ FluidNC ile doğrudan UART haberleşmesi (115200 baud)
+### Temel Özellikler
+- ✅ FluidNC ile **UART + WiFi/TCP** çift kanallı haberleşme
 - ✅ Gerçek zamanlı **Machine Position (MPos)** ve **Work Position (WPos)** gösterimi
 - ✅ Rotary encoder ile hassas jog kontrolü (interrupt tabanlı, 60ms throttle)
 - ✅ 4 buton: HOME / ZERO / EKSEN / HIZ-STEP
@@ -20,17 +21,30 @@
 - ✅ Popup bildirimleri
 - ✅ 10 saniye hareketsizlikte menüden otomatik çıkış
 
-### 🆕 v3.01 — Menü Sistemi & Spindle Gauge
+### 🆕 v4.01 — WiFi, Soft Reset & Duraklama
 
-- ✅ **Encoder tıklama ile menü erişimi** (ana ekranda tıkla → menüye gir)
-- ✅ **Spindle Kontrolü** — 270° analog gauge ile gerçek zamanlı RPM gösterimi
-  - Encoder ile hedef hız ayarı (500 RPM adımlarla, 0–20000 RPM)
-  - Renk kodlu ark: Yeşil (<7K) / Sarı (<14K) / Kırmızı (>14K)
-  - Tıklama ile M3/M5 komutu gönderimi
+- ✅ **WiFi Bağlantısı** — ESP32 WiFi üzerinden FluidNC'ye TCP bağlantısı (Port 23)
+  - Ağ tarama (RSSI sinyal gücü göstergesi ile)
+  - Karakter tekerleği ile şifre girişi (maskeli gösterim)
+  - FluidNC IP adresi ayarı (oktet oktet düzenleme)
+  - NVS ile ayarların kalıcı hafızaya kaydı
+  - Otomatik bağlantı (kayıtlı SSID varsa başlangıçta bağlanır)
+- ✅ **UART/TCP Otomatik Geçiş** — UART aktifse UART, değilse TCP kullanılır (500ms timeout)
+- ✅ **Header'da bağlantı durumu** — `[TCP]` yeşil / `[Wifi]` sarı / `[]` kırmızı
+- ✅ **Footer'da FluidNC IP** adresi gösterimi
+- ✅ **Duraklama / Devam** — SPEED butonu ile Feed Hold (`!`) ve Cycle Start (`~`)
+- ✅ **Alarm Kurtarma** — Alarm durumunda:
+  - HOME butonu → Kilidi Aç (`$X`)
+  - ZERO butonu → Soft Reset (`0x18`)
+- ✅ **Bağlamsal Footer** — Makine durumuna göre değişen yardım metni
+- ✅ **HOME butonu = Geri** — Menü ve alt ekranlarda geri dönüş
+
+### Menü Sistemi (v3.01'den)
+- ✅ **Spindle Kontrolü** — 270° analog gauge, 500 RPM adımlı hedef hız, M3/M5 gönderimi
 - ✅ **Jog Hızı Seçimi** — 1000 / 2000 / 3000 mm/dk
 - ✅ **Step Boyutu Seçimi** — 0.100 / 0.500 / 1.000 mm
 - ✅ **Soğutma Kontrolü** — KAPALI (M9) / FLOOD (M8) / MIST (M7)
-- ✅ **Uzun basma ile geri dönüş** (alt menülerden üst menüye)
+- ✅ **WiFi Ayarları** — Ağ Tara / Şifre Gir / IP Ayarla / Bağlan-Kes
 
 ---
 
@@ -54,8 +68,6 @@
 | DT (Out B) | D3 |
 | SW (Buton) | A0 |
 | GND | GND |
-
-> ⚠️ **Not:** D12 (GPIO47) encoder SW için sorunlu olabilir, bu yüzden A0 pini kullanılmaktadır.
 
 ### Butonlar (Aktif LOW — dahili pull-up)
 | Buton | Nano ESP32 |
@@ -118,6 +130,8 @@ Adafruit ST7789
 Adafruit GFX Library
 ```
 
+> `WiFi.h`, `Preferences.h` ve `SPI.h` kütüphaneleri ESP32 çekirdeği ile birlikte gelir.
+
 ### Yükleme
 
 1. Arduino IDE'yi açın
@@ -128,12 +142,36 @@ Adafruit GFX Library
 
 ---
 
+## � Haberleşme Mimarisi
+
+```
+                   ┌─────────────────────┐
+                   │   CNC Pendant       │
+                   │  (Nano ESP32)       │
+                   └──┬──────────┬───────┘
+                      │          │
+              UART    │          │  WiFi/TCP
+           (115200)   │          │  (Port 23)
+                      │          │
+                   ┌──┴──────────┴───────┐
+                   │     FluidNC         │
+                   │    (ESP32-S3)       │
+                   └─────────────────────┘
+```
+
+- **UART öncelikli:** UART'tan 500ms içinde veri geliyorsa komutlar UART üzerinden gönderilir
+- **Otomatik TCP geçişi:** UART pasifse ve WiFi/TCP bağlıysa komutlar TCP üzerinden gönderilir
+- Pendant her 250ms'de `?` sorgusu göndererek durum bilgisi alır (hem UART hem TCP)
+- TCP bağlantısı kesilirse 5 saniyede bir yeniden bağlanma denenir
+
+---
+
 ## 🖥️ Ekran Düzeni
 
 ### Ana Ekran
 ```
 ┌─────────────────────────────────────────────────────┐
-│ [IDLE]    CNC PENDANT    [HOMED]               X   │
+│ [IDLE]   CNC PENDANT  [HOMED]  [TCP]            X  │
 ├──────────────────┬──────────────────────────────────┤
 │   MACHINE POS    │         WORK POS                 │
 ├──────────────────┼──────────────────────────────────┤
@@ -141,41 +179,26 @@ Adafruit GFX Library
 │ Y   -45.500      │   -5.500   ← aktif eksen (sarı)  │
 │ Z    +0.000      │   +0.000                         │
 ├──────────────────┴──────────────────────────────────┤
-│ F:500  SPD:0  STEP:0.100  JF:2000                   │
+│ F:500  SPD:0  STEP:0.100  FNC:192.168.1.105         │
 │ [HOME] [ZERO] [AXIS] [SPEED]  Tikla:Menu            │
 └─────────────────────────────────────────────────────┘
 ```
 
-### Menü Ekranı
-```
-┌─────────────────────────────────────────────────────┐
-│              CNC MENU                               │
-├─────────────────────────────────────────────────────┤
-│  > Spindle Kontrolu                                 │
-│    Jog Hizi                                         │
-│    Step Boyutu                                      │
-│    Sogutma                                          │
-│    Geri Don                                         │
-├─────────────────────────────────────────────────────┤
-│  Encoder: Sec  |  Tikla: Gir                        │
-└─────────────────────────────────────────────────────┘
-```
+### Bağlamsal Footer Metinleri
+| Durum | Footer |
+|---|---|
+| IDLE / HOME | `[HOME] [ZERO] [AXIS] [SPEED]  Tikla:Menu` |
+| RUN / JOG | `[SPEED] Durakla` |
+| HOLD | `[SPEED] Devam Et` |
+| ALARM | `[ZERO] Reset  [HOME] Kilit Ac` |
 
-### Spindle Gauge Ekranı
-```
-┌─────────────────────────────────────────────────────┐
-│ SPINDLE KONTROLU                    [M3 AKTIF]      │
-├─────────────────────────┬───────────────────────────┤
-│                         │  HEDEF HIZ:               │
-│    ╭───270° gauge───╮   │     12000                 │
-│    │     12500       │   │      RPM                  │
-│    │      RPM        │   │                           │
-│    ╰────────────────╯   │   CALISIYOR               │
-│                         │                           │
-├─────────────────────────┴───────────────────────────┤
-│  Cevir: Hiz Ayarla  |  Tikla: M3 Gonder            │
-└─────────────────────────────────────────────────────┘
-```
+### Menü Ekranları
+- **CNC Menü** → Spindle Kontrolü, Jog Hızı, Step Boyutu, Soğutma, WiFi Ayarları
+- **Spindle Gauge** → 270° analog gauge + hedef hız paneli
+- **WiFi Ayarları** → Ağ Tara / Şifre Gir / IP Ayarla / Bağlan-Kes
+- **WiFi Ağ Tarama** → SSID listesi + sinyal gücü (dBm + ikon)
+- **WiFi Şifre Girişi** → Karakter tekerleği, maskeli gösterim, backspace
+- **WiFi IP Ayarı** → 4 oktet ayrı ayrı düzenleme
 
 ---
 
@@ -187,10 +210,10 @@ Adafruit GFX Library
 |---|---|
 | **Encoder çevirme** | Seçili eksende jog hareketi |
 | **Encoder tıklama** | Menüye giriş |
-| **HOME butonu** | Tüm eksenleri home'la (`$H`) |
-| **ZERO butonu** | Aktif ekseni sıfırla (`G92`) |
+| **HOME butonu** | Tüm eksenleri home'la (`$H`) / Alarm'da kilit aç (`$X`) |
+| **ZERO butonu** | Aktif ekseni sıfırla (`G92`) / Alarm'da soft reset (`0x18`) |
 | **EKSEN butonu** | X → Y → Z → X döngüsü |
-| **HIZ/STEP butonu** | Adım boyutunu büyüt; turdan sonra hızı artır |
+| **HIZ/STEP butonu** | Adım/hız ayarı / RUN'da duraklat (`!`) / HOLD'da devam (`~`) |
 
 ### Menü Navigasyonu
 
@@ -198,38 +221,28 @@ Adafruit GFX Library
 |---|---|
 | **Encoder çevirme** | Menü öğeleri arasında gezinme |
 | **Encoder kısa tıklama** | Seçili öğeye gir / onayla |
-| **Encoder uzun basma (500ms)** | Üst menüye / ana ekrana geri dön |
-| **Herhangi bir buton** | Alt ekranlardan ana ekrana dön |
+| **Encoder uzun basma (500ms)** | Üst menüye geri dön / Şifre ekranında karakter sil |
+| **HOME butonu** | Geri dön (tüm menü ve alt ekranlarda) |
+| **AXIS butonu** | WiFi şifre/IP ekranlarında onayla ve kaydet |
 | **10s hareketsizlik** | Otomatik ana ekrana dönüş |
 
-### Menü Öğeleri
+### WiFi Kurulum Adımları
 
-| Menü | Açıklama |
-|---|---|
-| **Spindle Kontrolü** | 270° gauge ile RPM gösterimi, encoder ile hedef hız ayarı (500 RPM adım), tıklama ile M3 S[hız] veya M5 gönderimi |
-| **Jog Hızı** | 1000 / 2000 / 3000 mm/dk arasında seçim |
-| **Step Boyutu** | 0.100 / 0.500 / 1.000 mm arasında seçim |
-| **Soğutma** | KAPALI (M9) / FLOOD (M8) / MIST (M7) kontrolü |
-| **Geri Dön** | Ana ekrana dönüş |
+1. Menü → **WiFi Ayarları** → **Ağ Tara** ile ağları listeleyin
+2. Encoder ile ağ seçin, tıklayarak onaylayın
+3. **Şifre Gir** ekranında encoder ile karakter seçip tıklayarak ekleyin
+   - Uzun basma = son karakteri sil, AXIS butonu = kaydet
+4. **IP Adresi Ayarla** ile FluidNC IP adresini girin
+   - Encoder ile değer değiştir, tıkla ile sonraki oktet, AXIS = kaydet
+5. **Bağlan / Kes** ile bağlantıyı başlatın
 
-### Jog Parametreleri
-
-**Adım Boyutları:**
-```
-0.100 → 0.500 → 1.000 mm
-```
-
-**Jog Hızları:**
-```
-1000 → 2000 → 3000 mm/dk
-```
-
-> HIZ/STEP butonuna her basışta adım büyür. Son adımdan 0.100'e döndüğünde jog hızı bir sonraki kademeye geçer.
+> Ayarlar NVS'ye kaydedilir, bir sonraki açılışta otomatik bağlanır.
 
 ---
 
 ## 📡 Durum Göstergeleri
 
+### Makine Durumu
 | Durum | Renk | Açıklama |
 |---|---|---|
 | IDLE | 🟢 Yeşil | Makine boşta |
@@ -240,13 +253,20 @@ Adafruit GFX Library
 | JOG | 🔵 Cyan | Jog hareketi |
 | DOOR | 🔴 Kırmızı | Kapı açık |
 
+### Bağlantı Durumu (Header)
+| İkon | Renk | Anlamı |
+|---|---|---|
+| `[TCP]` | 🟢 Yeşil | WiFi + TCP bağlı |
+| `[Wifi]` | 🟡 Sarı | WiFi bağlı, TCP bağlantısı yok |
+| `[]` | 🔴 Kırmızı | Bağlantı yok |
+
 ---
 
 ## 📁 Dosya Yapısı
 
 ```
 CNC_Pendant/
-├── pendant.ino         # Ana pendant kodu (v3.01)
+├── pendant.ino         # Ana pendant kodu (v4.01)
 ├── config.yaml         # FluidNC yapılandırma dosyası
 └── README.md           # Bu dosya
 ```
@@ -261,6 +281,9 @@ Arduino Nano ESP32              FluidNC ESP32-S3
 D9  (RX1)  ←───────────────── GPIO38 (UART1 TX)
 D8  (TX1)  ───────────────────→ GPIO39 (UART1 RX)
 GND        ─────────────────── GND
+
+        WiFi/TCP (Port 23)
+        ←────────────────→     (kablosuz alternatif)
 
 ST7789 TFT          EC11 Encoder        Butonlar
 ───────────         ────────────        ────────
