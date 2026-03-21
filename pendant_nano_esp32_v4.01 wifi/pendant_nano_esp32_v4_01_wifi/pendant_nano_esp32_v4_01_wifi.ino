@@ -1,7 +1,7 @@
 /**
  * =====================================================
  *  CNC Pendant — Arduino Nano ESP32
- *  v4.01 wifi — Wifi bağlantısı — Soft reset ve duraklama eklendi
+ *  v4.01 wifi — Wifi bağlantısı — Soft reset ve duraklama eklendi — Uyku modu 
  * =====================================================
  *
  * FluidNC config.yaml:
@@ -41,6 +41,9 @@
 #include <SPI.h>
 // TCP client ile FluidNC Data port 23'e baglaniyoruz
 #include <WiFi.h>
+#include <driver/rtc_io.h>
+#include <esp_sleep.h>
+
 
 // ─── PIN TANIMLARI ────────────────────────────────────
 #define ENC_CLK D2
@@ -55,11 +58,16 @@
 #define TFT_CS D10
 #define TFT_DC D6
 #define TFT_RST D7
+#define TFT_BLK A2 // Arka ışık (Backlight) kontrolü
 
 // ─── TFT ──────────────────────────────────────────────
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 #define TFT_W 320
 #define TFT_H 170
+
+// ─── PİL (BATTERY) ────────────────────────────────────
+#define BAT_PIN A1      // GPIO2
+#define BAT_R_RATIO 2.0 // 100K + 100K voltaj bölücü oranı
 
 // ─── RENKLER ──────────────────────────────────────────
 #define C_BG 0x0000
@@ -193,6 +201,13 @@ bool uartActive = false;
 unsigned long lastUartStatus = 0;
 #define UART_STATUS_INTERVAL 250 // ms -- UART uzerinden ? sorgusu
 
+// ─── DEEP SLEEP ──────────────────────────────────────
+#define SLEEP_TIMEOUT_MS 18000     // 2 dakika veri gelmezse uyu
+#define SLEEP_WARNING_MS 13000     // 10 saniye kala uyarı göster
+unsigned long lastDataReceived = 0; // UART veya TCP'den son veri zamanı
+bool sleepWarningShown = false;
+#define BTN_HOME_GPIO GPIO_NUM_7 // D4 = GPIO7
+
 // Jog throttle
 unsigned long lastJog = 0;
 #define JOG_THROTTLE_MS 60
@@ -269,15 +284,39 @@ Btn btns[4] = {{BTN_HOME, HIGH, false, 0},
                {BTN_SPEED, HIGH, false, 0}};
 #define DEBOUNCE_MS 50
 
+// HOME tuşu uzun basma takibi
+unsigned long homePressStart = 0;
+bool homeLongFired = false;
+#define HOME_LONG_PRESS_MS 1500 // 1.5 saniye basılı tutunca uyku
+
 void readBtns() {
   for (int i = 0; i < 4; i++) {
     bool s = digitalRead(btns[i].pin);
     if (s != btns[i].lastState && (millis() - btns[i].lastMs > DEBOUNCE_MS)) {
       btns[i].lastMs = millis();
       btns[i].lastState = s;
+
       if (s == LOW) {
-        btns[i].fired = true;
+        if (i == 0) { // HOME butonu
+          homePressStart = millis();
+          homeLongFired = false;
+        } else {
+          btns[i].fired = true; // Diğer butonlar eskisi gibi çalışır
+        }
+      } else if (s == HIGH && i == 0) {
+        // HOME butonu bırakıldı
+        if (!homeLongFired) {
+          btns[0].fired = true; // Uzun basılmadıysa kısa tık olarak kaydet
+        }
       }
+    }
+
+    // HOME butonuna basılı tutuluyorsa ve 1.5 saniyeyi geçtiyse uykuya geç
+    if (i == 0 && s == LOW && !homeLongFired &&
+        (millis() - homePressStart > HOME_LONG_PRESS_MS)) {
+      homeLongFired = true;
+      Serial.println("[BTN] HOME long press -> DEEP SLEEP");
+      enterDeepSleep();
     }
   }
 }
@@ -417,6 +456,19 @@ static const char *stateStr(uint8_t s) {
   }
 }
 
+// ─── BATTERY OKUMA ────────────────────────────────────
+int getBatteryPercent() {
+  int raw = analogRead(BAT_PIN);
+  float voltage = (raw / 4095.0) * 3.3 * BAT_R_RATIO;
+  // Li-ion: 4.2V=%100, 3.0V=%0
+  int pct = (int)((voltage - 3.0) / (4.2 - 3.0) * 100.0);
+  if (pct > 100)
+    pct = 100;
+  if (pct < 0)
+    pct = 0;
+  return pct;
+}
+
 // ─── ANA EKRAN ────────────────────────────────────────
 void drawHeader() {
   tft.fillRect(0, 0, TFT_W, 19, C_PANEL);
@@ -427,13 +479,27 @@ void drawHeader() {
   tft.print(stateStr(cur.state));
   tft.print("]");
   tft.setTextColor(C_CYAN);
-  tft.setCursor(80, 5);
+  tft.setCursor(70, 5);
   tft.print("CNC PENDANT");
   tft.setTextColor(cur.homed ? C_GREEN : C_RED);
-  tft.setCursor(180, 5);
+  tft.setCursor(160, 5);
   tft.print(cur.homed ? "[HOMED]" : "[NO HOME]");
+
+  // Pil Durumu
+  int batPct = getBatteryPercent();
+  tft.setCursor(227, 5);
+  if (batPct > 20)
+    tft.setTextColor(C_GREEN);
+  else if (batPct > 5)
+    tft.setTextColor(C_YELLOW);
+  else
+    tft.setTextColor(C_RED);
+  tft.print("[");
+  tft.print(batPct);
+  tft.print("%]");
+
   // WiFi + TCP durum ikonu
-  tft.setCursor(250, 5);
+  tft.setCursor(260, 5);
   if (tcpConnected) {
     tft.setTextColor(C_GREEN);
     tft.print("[TCP]");
@@ -444,9 +510,9 @@ void drawHeader() {
     tft.setTextColor(C_RED);
     tft.print("[]");
   }
-  tft.fillRect(286, 1, 32, 17, C_ROWHL);
+  tft.fillRect(296, 1, 22, 17, C_ROWHL);
   tft.setTextColor(C_YELLOW);
-  tft.setCursor(295, 5);
+  tft.setCursor(301, 5);
   tft.print(AXIS_STR[selAxis]);
 }
 
@@ -514,7 +580,7 @@ void drawFooter() {
     tft.print("[SPEED] Devam Et");
   } else if (cur.state == 1 || cur.state == 5) { // RUN / JOG
     tft.setTextColor(C_CYAN);
-    tft.print("[SPEED] Durakla");
+    tft.print("[SPEED] Duraklat");
   } else {
     tft.print("[HOME] [ZERO] [AXIS] [SPEED]  Tikla:Menu");
   }
@@ -877,6 +943,8 @@ void tcpReadIncoming() {
       if (tcpLine.length() > 0) {
         Serial.printf("[TCP] RX: <%s>\n", tcpLine.c_str());
         parseStatus(tcpLine);
+        lastDataReceived =
+            millis(); // TCP veri geldi, uyku zamanlayıcısını sıfırla
       }
       tcpLine = "";
     } else if (c != '\n' && c != '\r') {
@@ -1151,6 +1219,59 @@ void popup(const char *msg, uint16_t bgCol, uint32_t dur) {
   needRedraw = true;
 }
 
+// ─── DEEP SLEEP FONKSİYONU ───────────────────────────
+void enterDeepSleep() {
+  Serial.println("[SLEEP] Entering deep sleep...");
+  // Ekranda uyku mesajı göster
+  tft.fillScreen(C_BG);
+  tft.setTextSize(2);
+  tft.setTextColor(C_YELLOW);
+  tft.setCursor(100, 40);
+  tft.print("UYKU MODU");
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(50, 80);
+  tft.print("FluidNC veri yok - enerji tasarrufu");
+  tft.setTextColor(C_GREEN);
+  tft.setCursor(60, 110);
+  tft.print("Uyandirmak icin HOME tusuna basin");
+  delay(2000);
+
+  // Ekran arka ışığını tamamen kapat (Siyah ekran kalmaması için)
+  digitalWrite(TFT_BLK, LOW);
+  // Eğer TFT arka ışığı pini kullanılıyorsa, onu LOW yaparak ekranı
+  // kapatabilirsiniz. Çoğu ekranda BLK pini direk VCC'ye bağlıdır. Eğer boardda
+  // bağlanan bir pin varsa buraya LOW yapın.
+  pinMode(TFT_CS, OUTPUT);
+  digitalWrite(TFT_CS, HIGH); // TFT'yi uykuya geçirmenin alternatifi (CS High)
+  tft.enableDisplay(
+      false); // ST7789 uyku komutu gönderir (ST7789_SLPIN / DISPOFF)
+
+  // WiFi kapat
+  if (wifiConnected) {
+    tcpClient.stop();
+    WiFi.disconnect();
+  }
+  WiFi.mode(WIFI_OFF);
+
+  // ÖNEMLİ: Uykuya geçmeden önce HOME butonunun bırakılmasını bekle.
+  // Yoksa basılı tuttuğumuz için anında geri uyanır!
+  while (digitalRead(BTN_HOME) == LOW) {
+    delay(10);
+  }
+  delay(50); // Bıraktıktan sonra ufak bir debounce beklemesi
+
+  // Uyku sırasında pindeki pull-up direncini aktif tut (dalgalanıp kendi
+  // kendine uyanmaması için)
+  rtc_gpio_pullup_en(BTN_HOME_GPIO);
+  rtc_gpio_pulldown_dis(BTN_HOME_GPIO);
+
+  // HOME butonu (GPIO7) ile uyanma ayarla (LOW = basılı)
+  esp_sleep_enable_ext0_wakeup(BTN_HOME_GPIO, LOW);
+  // Deep sleep'e gir
+  esp_deep_sleep_start();
+}
+
 // ─── EKRAN GEÇIŞ ─────────────────────────────────────
 void switchScreen(ScreenState s) {
   scrState = s;
@@ -1171,10 +1292,24 @@ void setup() {
   for (int i = 0; i < 4; i++)
     pinMode(btns[i].pin, INPUT_PULLUP);
 
+  // TFT Arka ışık (BLK) pinini çıkış yap ve aç
+  pinMode(TFT_BLK, OUTPUT);
+  digitalWrite(TFT_BLK, HIGH);
+
   Serial.begin(115200);
-  Serial.println("[PENDANT] Starting...");
+  // Uyanma sebebini kontrol et
+  esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
+  if (wakeup == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("[PENDANT] Woke up from deep sleep (HOME button)");
+  } else {
+    Serial.println("[PENDANT] Starting (normal boot)...");
+  }
+
+  // ADC çözünürlüğü ESP32-S3'te 12-bit (0-4095)
+  analogReadResolution(12);
 
   tft.init(TFT_H, TFT_W);
+  tft.enableDisplay(true); // Uyanınca ekranı aktif et
   tft.setRotation(1);
   tft.fillScreen(C_BG);
   tft.setTextWrap(false);
@@ -1210,6 +1345,7 @@ void setup() {
 
   needRedraw = true;
   lastActivity = millis();
+  lastDataReceived = millis(); // Uyku zamanlayıcısını başlat
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1223,6 +1359,9 @@ void loop() {
   // UART aktiflik kontrolu (500ms icerisinde veri geldiyse aktif)
   bool prevUartActive = uartActive;
   uartActive = (millis() - lastUartRx < UART_TIMEOUT_MS);
+  // Veri gelirse uyku zamanlayıcısını sıfırla
+  if (uartActive)
+    lastDataReceived = millis();
   if (prevUartActive && !uartActive) {
     Serial.println("[UART] UART pasif, TCP'ye geciliyor...");
     needRedraw = true;
@@ -1272,10 +1411,32 @@ void loop() {
   // Periyodik debug log
   if (millis() - lastDebugLog > DEBUG_LOG_INTERVAL) {
     lastDebugLog = millis();
-    Serial.printf("[DBG] UART:%s  WiFi:%s  TCP:%s  IP:%d.%d.%d.%d:%d\n",
+    unsigned long sleepRemain = 0;
+    if (millis() - lastDataReceived < SLEEP_TIMEOUT_MS)
+      sleepRemain = (SLEEP_TIMEOUT_MS - (millis() - lastDataReceived)) / 1000;
+    Serial.printf("[DBG] UART:%s  WiFi:%s  TCP:%s  IP:%d.%d.%d.%d:%d  "
+                  "Sleep:%lus  Bat:%d%%\n",
                   uartActive ? "YES" : "NO", wifiConnected ? "YES" : "NO",
                   tcpConnected ? "YES" : "NO", wifiIP[0], wifiIP[1], wifiIP[2],
-                  wifiIP[3], FLUIDNC_TCP_PORT);
+                  wifiIP[3], FLUIDNC_TCP_PORT, sleepRemain,
+                  getBatteryPercent());
+  }
+
+  // ── DEEP SLEEP KONTROLÜ ──────────────────────────────
+  unsigned long noDataDuration = millis() - lastDataReceived;
+  // 10 saniye kala uyarı göster
+  if (noDataDuration > SLEEP_WARNING_MS && !sleepWarningShown &&
+      scrState == SCR_MAIN) {
+    sleepWarningShown = true;
+    popup("UYKU: 5 SN...", C_ORANGE, 500);
+  }
+  // 2 dakika doldu → deep sleep
+  if (noDataDuration > SLEEP_TIMEOUT_MS) {
+    enterDeepSleep();
+  }
+  // Veri gelirse uyarı flag'ini sıfırla
+  if (uartActive || tcpConnected) {
+    sleepWarningShown = false;
   }
 
   // Her detent 2 puls üretiyor → 2'ye böl, kalanı biriktir
