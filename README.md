@@ -3,7 +3,7 @@
 **Arduino Nano ESP32 tabanlı (farklı mikroişlemci kullanabilirsiniz), ST7789 TFT ekranlı, FluidNC uyumlu CNC kumanda paneli.**
 
 > Tasarım & Geliştirme: **VOLTveTORK**
-> Sürüm: **v4.01** — WiFi bağlantısı, Soft Reset ve Duraklama
+> Sürüm: **v4.01** — WiFi bağlantısı, Soft Reset ve Duraklama — Uyku Modu
 
 ---
 
