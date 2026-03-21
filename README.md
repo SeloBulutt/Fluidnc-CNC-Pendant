@@ -122,7 +122,7 @@ Kablo bağımlılığından kurtulmak için Pendant'a bir Li-ion pil entegre ede
   │ Şarj + Koru│ (OUT-)  │ Voltaj Yüks. │ (OUT- GND) │ ESP32 (VIN/GND)│
   └────────────┘         └──────────────┘            └───────────────┘
 ```
-1. **TP4056:** USB takılıyken mili şarj eder. Sistem 2.5V altına düştüğünde çıkışı kesip pili korur (DW01A'lı versiyon).
+1. **TP4056:** Uart kablosu takılıyken pili şarj eder. Sistem 2.5V altına düştüğünde çıkışı kesip pili korur (DW01A'lı versiyon).
 2. **MT3608 Regülatör:** Pil voltajı ne kadar düşerse düşsün, her zaman anlık olarak 5.0V çıkışa (trimpot ile ayarlayın) yükseltir. Nano ESP32 bu temiz 5V'u kendi kaliteli 3.3V regülatöründen geçirip ekranı sorunsuz besler.
 
 > **Uyku Modu Farkı:** Cihaz hiçbir haberleşme almazsa veya **HOME tuşuna 1.5 sn basılı tutulursa** her şey (ekran ışığı dahil) kapatılır. Bu modda pil ömrü aylarca dayanabilir.
