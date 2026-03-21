@@ -33,11 +33,14 @@
 - ✅ **Header'da bağlantı durumu** — `[TCP]` yeşil / `[Wifi]` sarı / `[]` kırmızı
 - ✅ **Footer'da FluidNC IP** adresi gösterimi
 - ✅ **Duraklama / Devam** — SPEED butonu ile Feed Hold (`!`) ve Cycle Start (`~`)
+- ✅ **Otomatik & Manuel Uyku Modu (Deep Sleep)** — 2 dakika işlem yapılmazsa veya HOME tuşuna uzun basıldığında cihaz 10µA tüketen uyku moduna geçer.
+- ✅ **Batarya Görüntüleme** — Sağ üst köşede pil yüzdesini (`[🔋 78%]`) gösterir (A1 pini üzerinden voltaj okuma).
+- ✅ **Arka Işık (BLK) Kontrolü** — Uyku modunda ekranın arkasındaki LED aydınlatmasını tamamen keser (A2 pini).
 - ✅ **Alarm Kurtarma** — Alarm durumunda:
   - HOME butonu → Kilidi Aç (`$X`)
   - ZERO butonu → Soft Reset (`0x18`)
 - ✅ **Bağlamsal Footer** — Makine durumuna göre değişen yardım metni
-- ✅ **HOME butonu = Geri** — Menü ve alt ekranlarda geri dönüş
+- ✅ **HOME butonu = Geri / Uyku** — Menü ve alt ekranlarda geri dönüş, ana ekranda 1.5 sn basılı tutulursa derin uyku.
 
 ### Menü Sistemi (v3.01'den)
 - ✅ **Spindle Kontrolü** — 270° analog gauge, 500 RPM adımlı hedef hız, M3/M5 gönderimi
@@ -85,9 +88,14 @@
 | CS | D10 | |
 | DC | D6 | |
 | RES / RST | D7 | |
-| BLK | 3.3V | Arka ışık |
+| BLK | **A2** | Arka ışık (Uyku modu için A2'den kontrol edilir) |
 | VCC | 3.3V | |
 | GND | GND | |
+
+### Pil Ölçümü (Güç Yönetimi)
+| Sensör / Pin | Nano ESP32 | Yön |
+|---|---|---|
+| TP4056 B+ ucu | **A1** (GPIO2) | 100K+100K Voltaj bölücü üzerinden |
 
 ### UART → FluidNC ESP32-S3
 | Nano ESP32 | ESP32-S3 | Yön |
@@ -97,6 +105,27 @@
 | GND | GND | Ortak toprak |
 
 > ⚠️ **TX → RX çapraz bağlanır!**
+
+---
+
+## 🔋 Güç Yönetimi ve Batarya (Opsiyonel)
+
+Kablo bağımlılığından kurtulmak için Pendant'a bir Li-ion pil entegre edebilirsiniz. En kararlı ve ekran parlaklığını etkilemeyen 5V yükseltici (MT3608) dizilimi aşağıdaki gibidir:
+
+```text
+  [Li-ion Pil]
+       │
+      (B+/B-)
+       ▼
+  ┌────────────┐ (OUT+)  ┌──────────────┐ (OUT+ 5V)  ┌───────────────┐
+  │ TP4056     ├────────►│ MT3608 Boost ├───────────►│ Arduino Nano  │ (VIN'e Girin)
+  │ Şarj + Koru│ (OUT-)  │ Voltaj Yüks. │ (OUT- GND) │ ESP32 (VIN/GND)│
+  └────────────┘         └──────────────┘            └───────────────┘
+```
+1. **TP4056:** USB takılıyken mili şarj eder. Sistem 2.5V altına düştüğünde çıkışı kesip pili korur (DW01A'lı versiyon).
+2. **MT3608 Regülatör:** Pil voltajı ne kadar düşerse düşsün, her zaman anlık olarak 5.0V çıkışa (trimpot ile ayarlayın) yükseltir. Nano ESP32 bu temiz 5V'u kendi kaliteli 3.3V regülatöründen geçirip ekranı sorunsuz besler.
+
+> **Uyku Modu Farkı:** Cihaz hiçbir haberleşme almazsa veya **HOME tuşuna 1.5 sn basılı tutulursa** her şey (ekran ışığı dahil) kapatılır. Bu modda pil ömrü aylarca dayanabilir.
 
 ---
 
@@ -171,7 +200,7 @@ Adafruit GFX Library
 ### Ana Ekran
 ```
 ┌─────────────────────────────────────────────────────┐
-│ [IDLE]   CNC PENDANT  [HOMED]  [TCP]            X  │
+│ [IDLE]   CNC PENDANT  [HOMED]  [TCP]  [🔋 %78]  X  │
 ├──────────────────┬──────────────────────────────────┤
 │   MACHINE POS    │         WORK POS                 │
 ├──────────────────┼──────────────────────────────────┤
@@ -188,7 +217,7 @@ Adafruit GFX Library
 | Durum | Footer |
 |---|---|
 | IDLE / HOME | `[HOME] [ZERO] [AXIS] [SPEED]  Tikla:Menu` |
-| RUN / JOG | `[SPEED] Durakla` |
+| RUN / JOG | `[SPEED] Duraklat` |
 | HOLD | `[SPEED] Devam Et` |
 | ALARM | `[ZERO] Reset  [HOME] Kilit Ac` |
 
@@ -210,7 +239,8 @@ Adafruit GFX Library
 |---|---|
 | **Encoder çevirme** | Seçili eksende jog hareketi |
 | **Encoder tıklama** | Menüye giriş |
-| **HOME butonu** | Tüm eksenleri home'la (`$H`) / Alarm'da kilit aç (`$X`) |
+| **HOME Butonu (Kısa)** | Tüm eksenleri home'la (`$H`) / Alarm'da kilit aç (`$X`) |
+| **HOME Butonu (Uzun 1.5s)** | Cihazı derin uykuya al (Kapat) |
 | **ZERO butonu** | Aktif ekseni sıfırla (`G92`) / Alarm'da soft reset (`0x18`) |
 | **EKSEN butonu** | X → Y → Z → X döngüsü |
 | **HIZ/STEP butonu** | Adım/hız ayarı / RUN'da duraklat (`!`) / HOLD'da devam (`~`) |
