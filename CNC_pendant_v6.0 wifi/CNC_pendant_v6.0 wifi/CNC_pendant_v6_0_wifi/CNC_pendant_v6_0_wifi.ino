@@ -1,8 +1,7 @@
 /**
  * =====================================================
  *  CNC Pendant — Arduino Nano ESP32
- *  v6.0 wifi — Otomatik ip çekme - donma sorunu düzeltildi - uart ve wifi
- * bağlantı gösterimi
+ *  v6.0 wifi — Otomatik ip çekme - donma sorunu düzeltildi - uart ve wifi bağlantı gösterimi
  * =====================================================
  *
  * FluidNC config.yaml:
