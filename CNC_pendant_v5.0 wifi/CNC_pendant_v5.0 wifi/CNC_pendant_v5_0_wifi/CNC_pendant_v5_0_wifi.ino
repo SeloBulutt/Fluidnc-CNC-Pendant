@@ -1,7 +1,8 @@
 /**
  * =====================================================
  *  CNC Pendant — Arduino Nano ESP32
- *  v4.01 wifi — Wifi bağlantısı — Soft reset ve duraklama eklendi — Uyku modu 
+ *  v6.0 wifi — Otomatik ip çekme - donma sorunu düzeltildi - uart ve wifi
+ * bağlantı gösterimi
  * =====================================================
  *
  * FluidNC config.yaml:
@@ -25,10 +26,10 @@
  *   Home: Kilidi Aç
  *   Zero: Soft Reset
  *
- * Hareket Halinde:
- *   Speed: Duraklatma
- *
- *
+ * Hareket Halinde (RUN/HOLD):
+ *   Speed: Duraklatma / Devam etme
+ *   Axis: Feed/Spindle Override kısayol menüsü
+ *   Encoder: Override menüsünde değer değiştirme (±%10)
  *
  * KÜTÜPHANEler: Adafruit ST7789, Adafruit GFX Library
  * =====================================================
@@ -40,10 +41,10 @@
 #include <Preferences.h>
 #include <SPI.h>
 // TCP client ile FluidNC Data port 23'e baglaniyoruz
+#include <ESPmDNS.h>
 #include <WiFi.h>
 #include <driver/rtc_io.h>
 #include <esp_sleep.h>
-
 
 // ─── PIN TANIMLARI ────────────────────────────────────
 #define ENC_CLK D2
@@ -94,10 +95,13 @@ struct Status {
   float spindle;
   uint8_t state;
   bool homed;
+  uint8_t feedOv;    // Feed override % (FluidNC Ov: alanından)
+  uint8_t rapidOv;   // Rapid override %
+  uint8_t spindleOv; // Spindle override %
 };
 
-Status cur = {0, 0, 0, 0, 0, 0, 0, 0, 0, false};
-Status prev = {0, 0, 0, 0, 0, 0, 0, 0, 0, false};
+Status cur = {0, 0, 0, 0, 0, 0, 0, 0, 0, false, 100, 100, 100};
+Status prev = {0, 0, 0, 0, 0, 0, 0, 0, 0, false, 100, 100, 100};
 
 // ─── PENDANT AYARLARI ─────────────────────────────────
 static const char *AXIS_STR[] = {"X", "Y", "Z"};
@@ -124,11 +128,17 @@ enum ScreenState {
   SCR_WIFI_MENU,
   SCR_WIFI_SCAN,
   SCR_WIFI_PASS,
-  SCR_WIFI_IP
+  SCR_WIFI_IP,
+  SCR_FEED_OV,
+  SCR_SPINDLE_OV,
+  SCR_OVERRIDE_SEL
 };
 ScreenState scrState = SCR_MAIN;
 unsigned long lastActivity = 0;
 #define MENU_TIMEOUT_MS 10000
+
+// Override: Encoder doğrudan ±10% komutu gönderir, tıklama %100 reset
+uint8_t ovSelIdx = 0; // Override seçim ekranı (0=Feed, 1=Spindle)
 
 bool needRedraw = true;
 
@@ -137,6 +147,10 @@ bool needRedraw = true;
 int menuIdx = 0;
 static const char *MENU_LABELS[] = {
     "Spindle Kontrolu", "Jog Hizi", "Step Boyutu", "Sogutma", "WiFi Ayarlari",
+};
+// RUN/HOLD durumunda menü etiketleri
+static const char *MENU_RUN_LABELS[] = {
+    "Spindle Override", "Feed Override", "Jog Hizi", "Step Boyutu", "Sogutma",
 };
 
 // Spindle kontrol
@@ -166,6 +180,10 @@ unsigned long lastTcpReconnect = 0;
 unsigned long lastDebugLog = 0;
 #define DEBUG_LOG_INTERVAL 3000 // ms -- periyodik debug log
 
+// ─── mDNS DEĞİŞKENLERİ ─────────────────────────────
+bool mdnsStarted = false;
+uint8_t tcpFailCount = 0; // TCP bağlantı başarısızlık sayacı
+
 // WiFi tarama
 #define WIFI_MAX_SCAN 8
 String scanSSIDs[WIFI_MAX_SCAN];
@@ -176,8 +194,8 @@ int wifiScanIdx = 0;
 // WiFi alt menü
 #define WIFI_MENU_COUNT 5
 int wifiMenuIdx = 0;
-static const char *WIFI_MENU_LABELS[] = {
-    "Ag Tara", "Sifre Gir", "IP Adresi Ayarla", "Baglan / Kes", "Geri Don"};
+static const char *WIFI_MENU_LABELS[] = {"Ag Tara", "Sifre Gir", "Oto IP Bul",
+                                         "Baglan / Kes", "Geri Don"};
 
 // Karakter tekerleği (şifre girişi)
 static const char CHAR_SET[] =
@@ -202,8 +220,8 @@ unsigned long lastUartStatus = 0;
 #define UART_STATUS_INTERVAL 250 // ms -- UART uzerinden ? sorgusu
 
 // ─── DEEP SLEEP ──────────────────────────────────────
-#define SLEEP_TIMEOUT_MS 18000     // 2 dakika veri gelmezse uyu
-#define SLEEP_WARNING_MS 13000     // 10 saniye kala uyarı göster
+#define SLEEP_TIMEOUT_MS 120000     // 2 dakika veri gelmezse uyu
+#define SLEEP_WARNING_MS 110000     // 10 saniye kala uyarı göster
 unsigned long lastDataReceived = 0; // UART veya TCP'den son veri zamanı
 bool sleepWarningShown = false;
 #define BTN_HOME_GPIO GPIO_NUM_7 // D4 = GPIO7
@@ -343,6 +361,23 @@ void fcZero(uint8_t ax) {
   fcSend(cmds[ax]);
 }
 
+// Tek byte realtime komut gönder (override, feed hold vb.)
+void fcSendRealtime(uint8_t cmd) {
+  if (uartActive) {
+    FLUIDNC.write(cmd); // UART aktifse sadece UART'a gonder
+  } else if (tcpConnected) {
+    tcpClient.write(cmd); // UART yoksa TCP'ye gonder
+  }
+}
+
+// Override: Doğrudan ±10% realtime komut gönder (FluidNC arayüzü ile aynı)
+void sendFeedOvUp() { fcSendRealtime(0x91); }    // Feed +10%
+void sendFeedOvDown() { fcSendRealtime(0x92); }  // Feed -10%
+void sendFeedOvReset() { fcSendRealtime(0x90); } // Feed Reset %100
+void sendSpnOvUp() { fcSendRealtime(0x9A); }     // Spindle +10%
+void sendSpnOvDown() { fcSendRealtime(0x9B); }   // Spindle -10%
+void sendSpnOvReset() { fcSendRealtime(0x99); }  // Spindle Reset %100
+
 // ─── FLUIDNC PARSE ────────────────────────────────────
 void parseStatus(const String &s) {
   if (s.startsWith("Idle"))
@@ -389,6 +424,21 @@ void parseStatus(const String &s) {
       cur.wco_x = w.substring(0, c1).toFloat();
       cur.wco_y = w.substring(c1 + 1, c2).toFloat();
       cur.wco_z = w.substring(c2 + 1, e > 0 ? e : (int)w.length()).toFloat();
+    }
+  }
+
+  // Override yüzdelerini parse et (Ov:100,100,100)
+  idx = s.indexOf("Ov:");
+  if (idx >= 0) {
+    String ov = s.substring(idx + 3);
+    int c1 = ov.indexOf(',');
+    int c2 = ov.indexOf(',', c1 + 1);
+    int e = ov.indexOf('|');
+    if (c1 > 0 && c2 > c1) {
+      cur.feedOv = ov.substring(0, c1).toInt();
+      cur.rapidOv = ov.substring(c1 + 1, c2).toInt();
+      cur.spindleOv =
+          ov.substring(c2 + 1, e > 0 ? e : (int)ov.length()).toInt();
     }
   }
 }
@@ -498,14 +548,17 @@ void drawHeader() {
   tft.print(batPct);
   tft.print("%]");
 
-  // WiFi + TCP durum ikonu
+  // Baglanti durumu ikonu (UART oncelikli)
   tft.setCursor(260, 5);
-  if (tcpConnected) {
+  if (uartActive) {
     tft.setTextColor(C_GREEN);
-    tft.print("[TCP]");
+    tft.print("[UART]");
+  } else if (tcpConnected) {
+    tft.setTextColor(C_GREEN);
+    tft.print("[WiFi]");
   } else if (wifiConnected) {
     tft.setTextColor(C_YELLOW);
-    tft.print("[Wifi]");
+    tft.print("[WiFi]");
   } else {
     tft.setTextColor(C_RED);
     tft.print("[]");
@@ -549,25 +602,38 @@ void drawFooter() {
   tft.setTextColor(C_ORANGE);
   tft.setCursor(4, y0 + 5);
   tft.print("F:");
-  char fb[8];
+  char fb[12];
   snprintf(fb, sizeof(fb), "%.0f", cur.feed);
   tft.print(fb);
+  // Override yüzdesi göster (%100 değilse)
+  if (cur.feedOv != 100) {
+    char ovBuf[8];
+    snprintf(ovBuf, sizeof(ovBuf), "[%d%%]", cur.feedOv);
+    tft.setTextColor(C_YELLOW);
+    tft.print(ovBuf);
+  }
   tft.setTextColor(C_GREEN);
-  tft.setCursor(55, y0 + 5);
-  tft.print("SPD:");
-  char sb[8];
+  tft.setCursor(85, y0 + 5);
+  tft.print("S:");
+  char sb[12];
   snprintf(sb, sizeof(sb), "%.0f", cur.spindle);
   tft.print(sb);
+  if (cur.spindleOv != 100) {
+    char ovBuf[8];
+    snprintf(ovBuf, sizeof(ovBuf), "[%d%%]", cur.spindleOv);
+    tft.setTextColor(C_YELLOW);
+    tft.print(ovBuf);
+  }
   tft.setTextColor(C_CYAN);
-  tft.setCursor(130, y0 + 5);
+  tft.setCursor(165, y0 + 5);
   tft.print("STEP:");
   tft.print(STEP_STR[selStep]);
   // FluidNC IP adresi
-  tft.setCursor(210, y0 + 5);
+  tft.setCursor(240, y0 + 5);
   tft.setTextColor(C_ORANGE);
   char fncIP[22];
-  snprintf(fncIP, sizeof(fncIP), "FNC:%d.%d.%d.%d", wifiIP[0], wifiIP[1],
-           wifiIP[2], wifiIP[3]);
+  snprintf(fncIP, sizeof(fncIP), "%d.%d.%d.%d", wifiIP[0], wifiIP[1], wifiIP[2],
+           wifiIP[3]);
   tft.print(fncIP);
   tft.setTextColor(C_GRAY);
   tft.setCursor(4, y0 + 19);
@@ -647,7 +713,9 @@ void drawMenuScreen() {
     tft.setCursor(sel ? 24 : 16, y + 3);
     if (sel)
       tft.print("> ");
-    tft.print(MENU_LABELS[i]);
+    // RUN/HOLD durumunda farklı menü etiketleri
+    bool runMode = (cur.state == 1 || cur.state == 2);
+    tft.print(runMode ? MENU_RUN_LABELS[i] : MENU_LABELS[i]);
   }
   tft.drawFastHLine(0, 150, TFT_W, C_GRAY);
   tft.setTextSize(1);
@@ -766,6 +834,185 @@ void drawSpindleScreen() {
   tft.setTextColor(C_GRAY);
   tft.setCursor(20, 157);
   tft.print("Cevir: Hiz Ayarla  |  Tikla: M3 Gonder");
+  needRedraw = false;
+}
+
+// ─── JOG HIZI EKRANI ──────────────────────────────────
+// ─── FEED OVERRIDE GAUGE EKRANI ──────────────────────
+void drawFeedOvScreen() {
+  tft.fillScreen(C_BG);
+  tft.fillRect(0, 0, TFT_W, 18, C_PANEL);
+  tft.setTextSize(1);
+  tft.setTextColor(C_CYAN);
+  tft.setCursor(4, 5);
+  tft.print("FEED OVERRIDE");
+  bool running = (cur.state == 1);
+  tft.setTextColor(running ? C_GREEN : C_YELLOW);
+  tft.setCursor(260, 5);
+  tft.print(running ? "[RUN]" : "[HOLD]");
+
+  int cx = 160, cy = 88, r = 58;
+  drawThickArc(cx, cy, r, 135.0, 270.0, 10, C_GRAY);
+  float valSweep = (cur.feedOv / 200.0) * 270.0;
+  if (valSweep < 0)
+    valSweep = 0;
+  if (valSweep > 270)
+    valSweep = 270;
+  uint16_t arcCol;
+  if (cur.feedOv < 80)
+    arcCol = C_RED;
+  else if (cur.feedOv < 100)
+    arcCol = C_ORANGE;
+  else if (cur.feedOv == 100)
+    arcCol = C_GREEN;
+  else if (cur.feedOv <= 150)
+    arcCol = C_YELLOW;
+  else
+    arcCol = C_RED;
+  if (valSweep > 0)
+    drawThickArc(cx, cy, r, 135.0, valSweep, 10, arcCol);
+  for (int i = 0; i <= 4; i++) {
+    float ta = 135.0 + i * 67.5;
+    drawGaugeTick(cx, cy, r + 4, ta, 10, C_WHITE);
+  }
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(cx - r - 22, cy + r - 8);
+  tft.print("0%");
+  tft.setCursor(cx - r - 22, cy - 20);
+  tft.print("50%");
+  tft.setCursor(cx - 15, cy - r - 14);
+  tft.print("100%");
+  tft.setCursor(cx + r + 6, cy - 20);
+  tft.print("150%");
+  tft.setCursor(cx + r + 6, cy + r - 8);
+  tft.print("200%");
+
+  // Ortada büyük yüzde değeri
+  char pctStr[8];
+  snprintf(pctStr, sizeof(pctStr), "%d%%", cur.feedOv);
+  tft.setTextSize(3);
+  tft.setTextColor(C_WHITE);
+  int tw = strlen(pctStr) * 18;
+  tft.setCursor(cx - tw / 2, cy - 14);
+  tft.print(pctStr);
+  tft.setTextSize(1);
+  tft.setTextColor(C_GREEN);
+  tft.setCursor(cx - 9, cy + 14);
+  tft.print("FEED");
+
+  tft.fillRect(0, 152, TFT_W, 18, C_PANEL);
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(15, 157);
+  tft.print("Cevir: +-10% Aninda  |  Tikla: %100 Reset");
+  needRedraw = false;
+}
+
+// ─── SPINDLE OVERRIDE GAUGE EKRANI ───────────────────
+void drawSpindleOvScreen() {
+  tft.fillScreen(C_BG);
+  tft.fillRect(0, 0, TFT_W, 18, C_PANEL);
+  tft.setTextSize(1);
+  tft.setTextColor(C_CYAN);
+  tft.setCursor(4, 5);
+  tft.print("SPINDLE OVERRIDE");
+  bool running = (cur.state == 1);
+  tft.setTextColor(running ? C_GREEN : C_YELLOW);
+  tft.setCursor(250, 5);
+  tft.print(running ? "[RUN]" : "[HOLD]");
+
+  int cx = 160, cy = 88, r = 58;
+  drawThickArc(cx, cy, r, 135.0, 270.0, 10, C_GRAY);
+  float valSweep = (cur.spindleOv / 200.0) * 270.0;
+  if (valSweep < 0)
+    valSweep = 0;
+  if (valSweep > 270)
+    valSweep = 270;
+  uint16_t arcCol;
+  if (cur.spindleOv < 80)
+    arcCol = C_RED;
+  else if (cur.spindleOv < 100)
+    arcCol = C_ORANGE;
+  else if (cur.spindleOv == 100)
+    arcCol = C_GREEN;
+  else if (cur.spindleOv <= 150)
+    arcCol = C_YELLOW;
+  else
+    arcCol = C_RED;
+  if (valSweep > 0)
+    drawThickArc(cx, cy, r, 135.0, valSweep, 10, arcCol);
+  for (int i = 0; i <= 4; i++) {
+    float ta = 135.0 + i * 67.5;
+    drawGaugeTick(cx, cy, r + 4, ta, 10, C_WHITE);
+  }
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(cx - r - 22, cy + r - 8);
+  tft.print("0%");
+  tft.setCursor(cx - r - 22, cy - 20);
+  tft.print("50%");
+  tft.setCursor(cx - 15, cy - r - 14);
+  tft.print("100%");
+  tft.setCursor(cx + r + 6, cy - 20);
+  tft.print("150%");
+  tft.setCursor(cx + r + 6, cy + r - 8);
+  tft.print("200%");
+
+  // Ortada büyük yüzde değeri
+  char pctStr[8];
+  snprintf(pctStr, sizeof(pctStr), "%d%%", cur.spindleOv);
+  tft.setTextSize(3);
+  tft.setTextColor(C_WHITE);
+  int tw = strlen(pctStr) * 18;
+  tft.setCursor(cx - tw / 2, cy - 14);
+  tft.print(pctStr);
+  tft.setTextSize(1);
+  tft.setTextColor(C_GREEN);
+  tft.setCursor(cx - 18, cy + 14);
+  tft.print("SPINDLE");
+
+  tft.fillRect(0, 152, TFT_W, 18, C_PANEL);
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(15, 157);
+  tft.print("Cevir: +-10% Aninda  |  Tikla: %100 Reset");
+  needRedraw = false;
+}
+
+// ─── OVERRIDE SEÇİM EKRANI ──────────────────────────
+void drawOverrideSelScreen() {
+  tft.fillScreen(C_BG);
+  tft.fillRect(0, 0, TFT_W, 22, C_PANEL);
+  tft.setTextSize(2);
+  tft.setTextColor(C_CYAN);
+  tft.setCursor(50, 3);
+  tft.print("OVERRIDE SECIMI");
+  tft.drawFastHLine(0, 22, TFT_W, C_GRAY);
+  const char *ovLabels[2] = {"Feed Ovr.", "Spindle Ovr."};
+  int ovVals[2] = {(int)cur.feedOv, (int)cur.spindleOv};
+  for (int i = 0; i < 2; i++) {
+    int y = 50 + i * 32;
+    bool sel = (i == (int)ovSelIdx);
+    if (sel)
+      tft.fillRoundRect(30, y, 260, 28, 4, C_ROWHL);
+    tft.setTextSize(2);
+    tft.setTextColor(sel ? C_YELLOW : C_WHITE);
+    tft.setCursor(sel ? 50 : 42, y + 6);
+    if (sel)
+      tft.print("> ");
+    tft.print(ovLabels[i]);
+    char pct[8];
+    snprintf(pct, sizeof(pct), "[%d%%]", ovVals[i]);
+    tft.setTextColor(ovVals[i] == 100 ? C_GREEN : C_YELLOW);
+    tft.setCursor(240, y + 6);
+    tft.print(pct);
+  }
+  tft.fillRect(0, 152, TFT_W, 18, C_PANEL);
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(40, 157);
+  tft.print("Encoder: Sec  |  Tikla: Onayla");
   needRedraw = false;
 }
 
@@ -917,6 +1164,9 @@ void wifiConnect() {
     Serial.printf("[WIFI] Connected! IP: %s\n",
                   WiFi.localIP().toString().c_str());
     wifiSavePrefs();
+    // mDNS ile FluidNC IP adresini otomatik kesfet
+    Serial.println("[WIFI] Auto-discovering FluidNC IP via mDNS...");
+    mdnsDiscoverFluidNC();
     // TCP baglantisini baslat
     tcpStartConnection();
   } else {
@@ -927,9 +1177,67 @@ void wifiConnect() {
 void wifiDisconnect() {
   tcpClient.stop();
   tcpConnected = false;
+  tcpFailCount = 0;
+  if (mdnsStarted) {
+    MDNS.end();
+    mdnsStarted = false;
+  }
   WiFi.disconnect();
   wifiConnected = false;
   Serial.println("[WIFI] Disconnected");
+}
+
+// ─── mDNS İLE FLUIDNC OTOMATİK KEŞFİ ──────────────
+bool mdnsDiscoverFluidNC() {
+  if (!wifiConnected)
+    return false;
+
+  if (!mdnsStarted) {
+    if (MDNS.begin("cncpendant")) {
+      mdnsStarted = true;
+      Serial.println("[mDNS] Started as 'cncpendant'");
+    } else {
+      Serial.println("[mDNS] Start failed!");
+      return false;
+    }
+  }
+
+  Serial.println("[mDNS] Searching for FluidNC on network...");
+  // FluidNC _http._tcp servisi yayinlar
+  int n = MDNS.queryService("http", "tcp");
+  Serial.printf("[mDNS] Found %d http services\n", n);
+
+  for (int i = 0; i < n; i++) {
+    String hostname = MDNS.hostname(i);
+    String hostLower = hostname;
+    hostLower.toLowerCase();
+    Serial.printf("[mDNS]   [%d] host=%s ip=%s port=%d\n", i, hostname.c_str(),
+                  MDNS.IP(i).toString().c_str(), MDNS.port(i));
+    // FluidNC hostname'i genellikle "fluidnc" icerir
+    if (hostLower.indexOf("fluidnc") >= 0 || hostLower.indexOf("fluid") >= 0) {
+      IPAddress ip = MDNS.IP(i);
+      if (ip[0] != 0) {
+        // Mevcut IP ile ayni mi kontrol et
+        if (wifiIP[0] == ip[0] && wifiIP[1] == ip[1] && wifiIP[2] == ip[2] &&
+            wifiIP[3] == ip[3]) {
+          Serial.println("[mDNS] IP unchanged, already correct");
+          return true;
+        }
+        wifiIP[0] = ip[0];
+        wifiIP[1] = ip[1];
+        wifiIP[2] = ip[2];
+        wifiIP[3] = ip[3];
+        wifiSavePrefs();
+        Serial.printf("[mDNS] >>> FluidNC found: %d.%d.%d.%d <<<\n", ip[0],
+                      ip[1], ip[2], ip[3]);
+        needRedraw = true;
+        return true;
+      }
+    }
+  }
+
+  Serial.println("[mDNS] FluidNC not found on network");
+  return false;
 }
 
 // ─── TCP FONKSİYONLARI ───────────────────────────────
@@ -964,13 +1272,22 @@ void tcpStartConnection() {
   char ipStr[16];
   snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", wifiIP[0], wifiIP[1], wifiIP[2],
            wifiIP[3]);
-  Serial.printf("[TCP] Connecting to %s:%d...\n", ipStr, FLUIDNC_TCP_PORT);
-  if (tcpClient.connect(ipStr, FLUIDNC_TCP_PORT)) {
+  Serial.printf("[TCP] Connecting to %s:%d (1s timeout)...\n", ipStr,
+                FLUIDNC_TCP_PORT);
+  // 1000ms timeout — donma suresi max 1 saniye (eskisi ~5 saniyeydi)
+  if (tcpClient.connect(ipStr, FLUIDNC_TCP_PORT, 1000)) {
     tcpConnected = true;
+    tcpFailCount = 0;
     Serial.println("[TCP] >>> CONNECTED to FluidNC! <<<");
     needRedraw = true;
   } else {
-    Serial.println("[TCP] >>> CONNECTION FAILED <<<");
+    tcpFailCount++;
+    Serial.printf("[TCP] Connection FAILED (attempt #%d)\n", tcpFailCount);
+    // Her 3 basarisiz denemede mDNS ile IP'yi tekrar kesfet
+    if (tcpFailCount >= 3 && tcpFailCount % 3 == 0) {
+      Serial.println("[TCP] Re-discovering FluidNC via mDNS...");
+      mdnsDiscoverFluidNC();
+    }
   }
 }
 
@@ -1250,6 +1567,10 @@ void enterDeepSleep() {
   // WiFi kapat
   if (wifiConnected) {
     tcpClient.stop();
+    if (mdnsStarted) {
+      MDNS.end();
+      mdnsStarted = false;
+    }
     WiFi.disconnect();
   }
   WiFi.mode(WIFI_OFF);
@@ -1335,7 +1656,7 @@ void setup() {
   tft.setTextColor(C_GREEN);
   tft.setTextSize(1);
   tft.setCursor(88, 65);
-  tft.print("FluidNC Pendant v4.01");
+  tft.print("FluidNC Pendant v6.0");
   tft.setTextColor(C_GRAY);
   tft.setCursor(110, 82);
   tft.print("by VOLTveTORK");
@@ -1384,8 +1705,13 @@ void loop() {
       Serial.println("[TCP] Connection lost!");
       needRedraw = true;
     }
-    // TCP bagli degilse yeniden baglanmayi dene
-    if (!tcpConnected && millis() - lastTcpReconnect > TCP_RECONNECT_INTERVAL) {
+    // TCP bagli degilse ve UART pasifse yeniden baglanmayi dene
+    // UART aktifken TCP reconnect DENEME — gereksiz donmayi onler
+    unsigned long reconnectInterval = (tcpFailCount < 3)    ? 5000
+                                      : (tcpFailCount < 10) ? 15000
+                                                            : 30000;
+    if (!uartActive && !tcpConnected &&
+        millis() - lastTcpReconnect > reconnectInterval) {
       lastTcpReconnect = millis();
       tcpStartConnection();
     }
@@ -1455,9 +1781,11 @@ void loop() {
   // (HOME = geri tuşu, menülerde ayrıca işleniyor)
   bool anyBtnExceptHome = btns[1].fired || btns[2].fired || btns[3].fired;
   // WiFi şifre ve IP ekranlarında AXIS butonu = confirm, çıkılmamalı
+  // Override ekranlarında da butonlar içeride işleniyor
   if (anyBtnExceptHome && scrState != SCR_MAIN && scrState != SCR_WIFI_PASS &&
       scrState != SCR_WIFI_IP && scrState != SCR_WIFI_MENU &&
-      scrState != SCR_WIFI_SCAN) {
+      scrState != SCR_WIFI_SCAN && scrState != SCR_FEED_OV &&
+      scrState != SCR_SPINDLE_OV && scrState != SCR_OVERRIDE_SEL) {
     for (int i = 1; i < 4; i++)
       btns[i].fired = false;
     switchScreen(SCR_MAIN);
@@ -1553,8 +1881,15 @@ void loop() {
     }
     if (btns[2].fired) {
       btns[2].fired = false;
-      selAxis = (selAxis + 1) % 3;
-      needRedraw = true;
+      // RUN/HOLD durumunda AXIS = Override kısayolı
+      if (cur.state == 1 || cur.state == 2) {
+        ovSelIdx = 0;
+        switchScreen(SCR_OVERRIDE_SEL);
+        break; // Hemen çık, yoksa updateMainDisplay needRedraw'ı tüketir
+      } else {
+        selAxis = (selAxis + 1) % 3;
+        needRedraw = true;
+      }
     }
     if (btns[3].fired) {
       btns[3].fired = false;
@@ -1595,27 +1930,47 @@ void loop() {
     }
     if (encClicked) {
       encClicked = false;
-      switch (menuIdx) {
-      case 0:
-        spindleTarget = (int)cur.spindle;
-        switchScreen(SCR_SPINDLE);
-        break;
-      case 1:
-        switchScreen(SCR_JOG);
-        break;
-      case 2:
-        switchScreen(SCR_STEP);
-        break;
-      case 3:
-        switchScreen(SCR_COOLANT);
-        break;
-      case 4:
-        wifiMenuIdx = 0;
-        switchScreen(SCR_WIFI_MENU);
-        break;
-      case 5:
-        switchScreen(SCR_MAIN);
-        break;
+      bool runMode = (cur.state == 1 || cur.state == 2);
+      if (runMode) {
+        // RUN/HOLD menüsü
+        switch (menuIdx) {
+        case 0: // Spindle Override
+          switchScreen(SCR_SPINDLE_OV);
+          break;
+        case 1: // Feed Override
+          switchScreen(SCR_FEED_OV);
+          break;
+        case 2:
+          switchScreen(SCR_JOG);
+          break;
+        case 3:
+          switchScreen(SCR_STEP);
+          break;
+        case 4:
+          switchScreen(SCR_COOLANT);
+          break;
+        }
+      } else {
+        // IDLE menüsü
+        switch (menuIdx) {
+        case 0:
+          spindleTarget = (int)cur.spindle;
+          switchScreen(SCR_SPINDLE);
+          break;
+        case 1:
+          switchScreen(SCR_JOG);
+          break;
+        case 2:
+          switchScreen(SCR_STEP);
+          break;
+        case 3:
+          switchScreen(SCR_COOLANT);
+          break;
+        case 4:
+          wifiMenuIdx = 0;
+          switchScreen(SCR_WIFI_MENU);
+          break;
+        }
       }
       break;
     }
@@ -1757,6 +2112,108 @@ void loop() {
     break;
   }
 
+  // ── FEED OVERRIDE (Doğrudan ±10% komut) ──────────
+  case SCR_FEED_OV: {
+    if (encLongPress || btns[0].fired) {
+      encLongPress = false;
+      btns[0].fired = false;
+      switchScreen(SCR_MENU);
+      break;
+    }
+    if (delta != 0) {
+      // Her encoder adımı doğrudan ±10% komutu gönderir
+      uint8_t cmd = (delta > 0) ? 0x91 : 0x92; // +10% veya -10%
+      int steps = abs(delta);
+      for (int i = 0; i < steps; i++) {
+        fcSendRealtime(cmd);
+        delay(20);
+      }
+      Serial.printf("[OV] Feed %s%d0%% sent\n", delta > 0 ? "+" : "-", steps);
+      lastActivity = millis();
+      // Ekranı biraz beklet ki FluidNC yeni değeri raporlasın
+      needRedraw = true;
+    }
+    if (encClicked) {
+      encClicked = false;
+      sendFeedOvReset(); // %100'e sıfırla
+      popup("FEED %100 RESET", C_GREEN, 400);
+      Serial.println("[OV] Feed override reset to 100%");
+      lastActivity = millis();
+      needRedraw = true;
+    }
+    // FluidNC'den gelen güncel değer değiştiğinde ekranı güncelle
+    static uint8_t prevFeedOv = 255;
+    if (needRedraw || cur.feedOv != prevFeedOv) {
+      drawFeedOvScreen();
+      prevFeedOv = cur.feedOv;
+    }
+    break;
+  }
+
+  // ── SPINDLE OVERRIDE (Doğrudan ±10% komut) ───────
+  case SCR_SPINDLE_OV: {
+    if (encLongPress || btns[0].fired) {
+      encLongPress = false;
+      btns[0].fired = false;
+      switchScreen(SCR_MENU);
+      break;
+    }
+    if (delta != 0) {
+      // Her encoder adımı doğrudan ±10% komutu gönderir
+      uint8_t cmd = (delta > 0) ? 0x9A : 0x9B; // +10% veya -10%
+      int steps = abs(delta);
+      for (int i = 0; i < steps; i++) {
+        fcSendRealtime(cmd);
+        delay(20);
+      }
+      Serial.printf("[OV] Spindle %s%d0%% sent\n", delta > 0 ? "+" : "-",
+                    steps);
+      lastActivity = millis();
+      needRedraw = true;
+    }
+    if (encClicked) {
+      encClicked = false;
+      sendSpnOvReset(); // %100'e sıfırla
+      popup("SPINDLE %100 RESET", C_GREEN, 400);
+      Serial.println("[OV] Spindle override reset to 100%");
+      lastActivity = millis();
+      needRedraw = true;
+    }
+    // FluidNC'den gelen güncel değer değiştiğinde ekranı güncelle
+    static uint8_t prevSpnOv = 255;
+    if (needRedraw || cur.spindleOv != prevSpnOv) {
+      drawSpindleOvScreen();
+      prevSpnOv = cur.spindleOv;
+    }
+    break;
+  }
+
+  // ── OVERRIDE SEÇİM EKRANI ─────────────────────────
+  case SCR_OVERRIDE_SEL: {
+    if (encLongPress || btns[0].fired) {
+      encLongPress = false;
+      btns[0].fired = false;
+      switchScreen(SCR_MAIN);
+      break;
+    }
+    if (delta != 0) {
+      ovSelIdx = (ovSelIdx == 0) ? 1 : 0;
+      needRedraw = true;
+    }
+    if (encClicked) {
+      encClicked = false;
+      if (ovSelIdx == 0) {
+        switchScreen(SCR_FEED_OV);
+      } else {
+        switchScreen(SCR_SPINDLE_OV);
+      }
+      break;
+    }
+    if (needRedraw)
+      drawOverrideSelScreen();
+    break;
+  }
+
   // ── WIFI MENÜ ──────────────────────────────────────
   case SCR_WIFI_MENU: {
     if (encLongPress || btns[0].fired) {
@@ -1786,10 +2243,24 @@ void loop() {
         passBuffer = wifiPass; // mevcut şifreyi yükle
         switchScreen(SCR_WIFI_PASS);
         break;
-      case 2: // IP Adresi Ayarla
-        ipEditIdx = 0;
-        switchScreen(SCR_WIFI_IP);
+      case 2: { // Oto IP Bul (mDNS)
+        if (!wifiConnected) {
+          popup("ONCE WIFI BAGLA!", C_RED, 1000);
+        } else {
+          popup("IP Araniyor...", C_CYAN, 200);
+          if (mdnsDiscoverFluidNC()) {
+            char ipMsg[24];
+            snprintf(ipMsg, sizeof(ipMsg), "IP: %d.%d.%d.%d", wifiIP[0],
+                     wifiIP[1], wifiIP[2], wifiIP[3]);
+            popup(ipMsg, C_GREEN, 1500);
+            tcpStartConnection();
+          } else {
+            popup("BULUNAMADI!", C_RED, 1000);
+          }
+        }
+        needRedraw = true;
         break;
+      }
       case 3: // Baglan / Kes
         if (wifiConnected) {
           wifiDisconnect();
