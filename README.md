@@ -2,8 +2,8 @@
 
 **Arduino Nano ESP32 tabanlı (farklı mikroişlemci kullanabilirsiniz), ST7789 TFT ekranlı, FluidNC uyumlu CNC kumanda paneli.**
 
-> Tasarım & Geliştirme: **VOLTveTORK**
-> Sürüm: **v6.0** — mDNS Otomatik IP Keşfi, TCP Donma Çözümü, UART Öncelikli İletişim, WiFi bağlantısı, Soft Reset ve Duraklama, Uyku Modu, Feed & Spindle Override, Sınırsız Menü Süresi
+> Tasarım & Geliştirme: **VOLTveTORK**  
+> Sürüm: **v7.0** — Modüler Mimari, Non-blocking Yapı, Z Probe Desteği, PWM Ekran Parlaklığı, NVS Ayar Kalıcılığı, Asenkron WiFi Tarama, Gelişmiş Güvenlik & Performans İyileştirmeleri
 
 ---
 
@@ -18,10 +18,41 @@
 - ✅ X, Y, Z eksen seçimi
 - ✅ Durum göstergesi: IDLE / RUN / HOLD / ALARM / HOME / JOG / DOOR
 - ✅ Homed durumu takibi
-- ✅ Popup bildirimleri
+- ✅ **Z Probe Desteği** (G38.2 ile derinlik ve hız ayarlı otomatik prob)
+- ✅ **PWM Ekran Parlaklık Kontrolü** (4 kademeli arka ışık seviyesi)
+- ✅ **Ayar Kalıcılığı (Preferences / NVS)** (Step, Hız, Eksen ve Parlaklık hafızada saklanır)
+- ✅ **Tam Modüler C++ Mimarisi** (Bakımı ve geliştirmesi kolay 5 bağımsız modül)
+- ✅ **Non-blocking Altyapı** (delay() içermeyen pop-up ve arka planda asenkron WiFi işlemleri)
+- ✅ **Gelişmiş Güvenlik:** RUN, HOLD ve ALARM durumlarında kazara hareketi önleyen jog kilidi
+- ✅ Popup bildirimleri (non-blocking)
 - ✅ **Alt menülerde sınırsız bekleme süresi** (Otomatik çıkış kaldırıldı)
 
-### 🆕 v6.0 — mDNS Otomatik IP Keşfi, TCP Donma Çözümü, UART Öncelikli İletişim
+### 🆕 v7.0 — Modüler Mimari, Non-blocking Yapı, Z Probe ve Performans İyileştirmeleri
+
+#### 🔧 Çözülen Sorunlar & Yapılan İyileştirmeler
+
+| Sorun / İhtiyaç | Açıklama | Çözüm |
+|---|---|---|
+| **Pop-up Delay Bloklaması** | Pop-up bildirimleri gösterilirken `delay()` kullanıldığı için sistem geçici olarak kilitleniyor, veri akışı duruyordu. | **Non-blocking Pop-up** mimarisine geçildi (`PopupState`). Bildirimler arka planda sayılır, sistem akışı kesilmez. |
+| **WiFi Bağlantı Bloklaması** | `while(WiFi.status())` döngüsü WiFi bağlanırken tüm sistemi bloke ediyor ve ekranı donduruyordu. | **State Machine (Durum Makinesi)** altyapısına geçildi (`wcsState`). Bağlantı arka planda kurulur. |
+| **WiFi Tarama Donması** | Ağ taraması yapılırken (`scanNetworks`) tüm ekran ve arayüz donuyordu. | **Asenkron WiFi taraması** (`WiFi.scanNetworks(true)` + polling) eklendi; tarama arka planda yapılır. |
+| **Heap Parçalanması (Çökme Riski)** | Dinamik `String +=` birleştirmeleri ESP32 RAM belleğinde parçalanmaya (fragmentation) yol açıyordu. | Sabit boyutlu **char buffer (`char fcBuf[128]`)** yapısına geçildi, bellek sızıntısı ve çökme riski ortadan kaldırıldı. |
+| **Ekran Titremesi (Flicker)** | Her ekran yenilemede `fillScreen()` çağrılması gözü yoran titremelere neden oluyordu. | **Partial Update (Kısmi Güncelleme)** ile sadece değişen alanlar çizilerek titreme minimuma indirildi. |
+| **Pil Dalgalanması** | Her döngüde analog voltaj okunması pil yüzdesinde sürekli oynamalara neden oluyordu. | **Önbellekleme & Filtre:** Pil 10 saniyede bir, 8 örnek ortalaması alınarak gürültüden arındırıldı. |
+| **RUN/HOLD Modunda İstem Dışı Jog** | Makine çalışırken encoder'a yanlışlıkla dokunulması iş parçasına çarpma riski doğuruyordu. | `ST_RUN`, `ST_HOLD` ve `ST_ALARM` durumlarında encoder jog komutları **yazılımsal olarak engellendi**. |
+| **Yeniden Başlatmada Ayar Kaybı** | Cihaz kapatıldığında step, hız, eksen ve ekran ayarları varsayılana dönüyordu. | **Preferences (NVS)** API'si ile ayarlar kalıcı hafızaya kaydedildi; açılışta otomatik geri yüklenir. |
+| **Monolitik Kod Karmaşası** | 2400+ satırlık tek `.ino` dosyası kodun bakımını, takibini ve geliştirilmesini zorlaştırıyordu. | Kod **5 modüle ayrıldı** (`config`, `input`, `fluidnc`, `wifi_mgr`, `display`). |
+
+#### ✨ Yeni Eklenen Özellikler
+
+- ✅ **Z Probe Ekranı (#18)** — Menüye yeni "Z Probe" özelliği eklendi! `G38.2` komutu ile hassas sıfırlama yapılır. Menü üzerinden prob derinliği (`-1` ile `-50 mm`) ve prob hızı (`20` ile `500 mm/dk`) encoder ile ayarlanabilir. IDLE modunda Eksen butonuna basılarak tetiklenir.
+- ✅ **PWM Ekran Parlaklık Ayarı (#19)** — A2 (TFT_BLK) pini üzerinden 4 kademeli PWM parlaklık kontrolü (%25, %50, %75, %100). WiFi menüsünden doğrudan değiştirilebilir.
+- ✅ **Kalıcı Ayar Hafızası (NVS / Preferences) (#20)** — Step boyutu, Jog hızı, seçili eksen ve ekran parlaklık seviyesi cihaz kapatılsa bile hafızada saklanır.
+- ✅ **RUN/HOLD Jog Kilidi (#1)** — İşleme veya alarm durumlarında istenmeyen fiziksel jog hareketlerini engelleyen güvenlik koruması.
+- ✅ **Float Epsilon Karşılaştırma (#8)** — Pozisyon değişimlerinde hassas floating point karşılaştırması (`fabsf(a-b) > 0.0005`).
+- ✅ **Merkezi MachineState Enum (#13)** — String karşılaştırmaları yerine enum mimarisi ile maksimum hız ve güvenilirlik.
+
+### v6.0 — mDNS Otomatik IP Keşfi, TCP Donma Çözümü, UART Öncelikli İletişim
 
 #### 🔧 Çözülen Sorunlar
 
@@ -33,7 +64,7 @@
 | **Header'da Belirsiz Bağlantı Göstergesi** | Bağlantı durumu ikonunda UART mı yoksa WiFi mı kullanıldığı net anlaşılmıyordu. | Header'da **`[UART]`** (yeşil) ve **`[WiFi]`** (yeşil/sarı) olarak ayrı ayrı gösterilir. Aktif kanal net şekilde belirtilir. |
 | **TCP Reconnect Sıklığı** | Başarısız TCP bağlantı denemelerinde her 5 saniyede bir yeniden deneme yapılıyordu, bu da sürekli donma hissi yaratıyordu. | **Üstel geri çekilme (exponential backoff)** eklendi: İlk 3 deneme → 5sn, sonraki 7 → 15sn, ardından → 30sn aralıklarla deneme yapılır. |
 
-#### ✨ Yeni Özellikler
+#### ✨ v6.0 ile Eklenen Özellikler
 
 - ✅ **mDNS ile Otomatik IP Keşfi** — WiFi bağlantısı kurulduğunda FluidNC'nin ağdaki IP adresi **otomatik olarak keşfedilir** (`ESPmDNS` kütüphanesi). Manuel IP girişine gerek kalmaz. TCP bağlantısı 3 kez başarısız olursa mDNS ile IP tekrar aranır.
 - ✅ **UART Öncelikli İletişim** — UART bağlantısı aktifse (500ms içinde veri geliyorsa) tüm komutlar UART üzerinden gönderilir. UART pasif olduğunda otomatik olarak TCP'ye geçilir. UART aktifken TCP reconnect denemeleri yapılmaz.
@@ -69,7 +100,8 @@
 - ✅ **Jog Hızı Seçimi** — 1000 / 2000 / 3000 mm/dk
 - ✅ **Step Boyutu Seçimi** — 0.100 / 0.500 / 1.000 mm
 - ✅ **Soğutma Kontrolü** — KAPALI (M9) / FLOOD (M8) / MIST (M7)
-- ✅ **WiFi Ayarları** — Ağ Tara / Şifre Gir / Oto IP Bul / Bağlan-Kes
+- ✅ **Z Probe** — G38.2 ile derinlik ve hız ayarlı otomatik prob alma (v7.0)
+- ✅ **WiFi ve Cihaz Ayarları** — Ağ Tara / Şifre Gir / Oto IP Bul / Bağlan-Kes / Ekran Parlaklığı (4 Kademe PWM)
 
 ---
 
@@ -110,7 +142,7 @@
 | CS | D10 | |
 | DC | D6 | |
 | RES / RST | D7 | |
-| BLK | **A2** | Arka ışık (Uyku modu için A2'den kontrol edilir) |
+| BLK | **A2** | Arka ışık (PWM parlaklık kontrolü & Uyku modu) |
 | VCC | 3.3V | |
 | GND | GND | |
 
@@ -198,9 +230,9 @@ Adafruit GFX Library
 
 1. Arduino IDE'yi açın
 2. **Board**: `Arduino Nano ESP32` seçin
-3. `pendant.ino` dosyasını açın
-4. Kütüphaneleri yükleyin
-5. **Upload** edin
+3. `CNC_pendant_v7_0_wifi.ino` dosyasını açın (Aynı klasördeki tüm `.h` ve `.cpp` modülleri Arduino IDE tarafından otomatik olarak sekmeler halinde açılacaktır)
+4. Gerekli kütüphanelerin kurulu olduğundan emin olun
+5. **Upload** butonuna basarak karta yükleyin
 
 ---
 
@@ -287,6 +319,8 @@ WiFi Bağlantısı Kuruldu
 | HOLD | `[SPEED] Devam Et` |
 | ALARM | `[ZERO] Reset  [HOME] Kilit Ac` |
 
+---
+
 ## 🗂️ Detaylı Menü Sistemi ve Ayarlar
 
 Kumandanın ana ekranındayken **Encoder'a bir kez tıklayarak** ana menüye girebilirsiniz. Menüde gezinmek için encoder çevrilir, seçim yapmak için tıklanır. Menülerden geri dönmek için **HOME** butonuna basabilir veya **Encoder'a uzun basabilirsiniz**. Alt menülerde ve ayarlarda **süre sınırı yoktur**, siz manuel olarak çıkmadıkça ekran ana menüye atmaz.
@@ -302,6 +336,7 @@ Makinenin çalışma durumuna (Boşta veya Çalışıyor) göre menü sistemi **
 │     Jog Hizi                                        │
 │     Step Boyutu                                     │
 │     Sogutma                                         │
+│     Z Probe                                         │
 │     WiFi Ayarlari                                   │
 ├─────────────────────────────────────────────────────┤
 │              Encoder: Sec  |  Tikla: Gir            │
@@ -384,12 +419,12 @@ Makine bir G-Code programı işlerken ana menüdeki "Spindle Kontrolü" gizlenir
 ### 3. Jog Hızı (Jog Speed)
 Seçili eksende manuel olarak hareket ettirilirken makinenin ulaşacağı maksimum hızı belirler.
 - **Seçenekler:** 1000, 2000, 3000 mm/dk.
-- **Kullanım:** Ekranda liste şeklinde görünür. Encoder çevrilerek istenilen hızın üzerine gelinir (yanında `>` işareti belirir) ve tıklanarak aktif edilir. 
+- **Kullanım:** Ekranda liste şeklinde görünür. Encoder çevrilerek istenilen hızın üzerine gelinir (yanında `>` işareti belirir) ve tıklanarak aktif edilir. Seçilen hız hafızaya (NVS) kaydedilir.
 
 ### 4. Step Boyutu (Step Size)
 Encoder'ın her bir tık (çıt) dönüşünde makinenin eksende ne kadar ilerleyeceğini belirler.
 - **Seçenekler:** 0.100 mm, 0.500 mm, 1.000 mm.
-- **Kullanım:** Hassas yaklaşım veya hızlı hareket için uygun değer encoder ile seçilir. Seçilen değer ana ekranın alt kısmında (Footer) gösterilir.
+- **Kullanım:** Hassas yaklaşım veya hızlı hareket için uygun değer encoder ile seçilir. Seçilen değer ana ekranın alt kısmında (Footer) gösterilir ve kalıcı hafızaya kaydedilir.
 
 ### 5. Soğutma (Coolant)
 Soğutma veya hava sistemlerini manuel olarak devreye almak için kullanılır.
@@ -398,8 +433,34 @@ Soğutma veya hava sistemlerini manuel olarak devreye almak için kullanılır.
   - **M8:** Flood (Su/Sıvı Soğutma)
   - **M7:** Mist (Hava/Sis Soğutma)
 
-### 6. WiFi Ayarları ve Kurulumu
-FluidNC kontrol kartına kablosuz olarak (TCP Port 23 üzerinden) bağlanmak için kullanılan detaylı ağ menüsüdür. Girilen tüm değerler ESP32'nin **kalıcı hafızasına (NVS)** kaydedilir. Cihaz her açıldığında bu bilgilere göre otomatik bağlanmayı dener.
+### 6. Z Probe (Makine IDLE / Boşta iken)
+Takım boyu veya iş parçası sıfırlama işlemlerini pendant üzerinden doğrudan başlatmak için eklenen prob menüsüdür.
+
+```text
+┌─────────────────────────────────────────────────────┐
+│ Z PROBE                                             │
+├─────────────────────────────────────────────────────┤
+│ Mevcut Z: +15.250 mm                                │
+│                                                     │
+│   > DERINLIK:  -10 mm                               │
+│     HIZ:       50 mm/dk                             │
+│                                                     │
+├─────────────────────────────────────────────────────┤
+│   AXIS: Baslat (G38.2)  |  Tikla: Secim Degistir    │
+└─────────────────────────────────────────────────────┘
+```
+
+- **Mevcut Z:** Çalışma koordinat sistemindeki (WCS) anlık Z yüksekliğini canlı olarak gösterir.
+- **Derinlik (Depth):** Probun maksimum ineceği mesafe (`-1 mm` ile `-50 mm` arasında 1'er mm adımlarla ayarlanabilir).
+- **Hız (Feed):** Probun arama hızı (`20 mm/dk` ile `500 mm/dk` arasında 10'ar mm/dk adımlarla ayarlanabilir).
+- **Kullanım:**
+  - **Encoder Çevirme:** Seçili olan parametrenin (Derinlik veya Hız) değerini artırır / azaltır.
+  - **Encoder Tıklama:** Düzenlenecek parametreyi değiştirir (Derinlik ↔ Hız arasında geçiş yapar).
+  - **EKSEN (AXIS) Butonu:** Probu başlatır (`G38.2 Z{derinlik} F{hiz}`). Güvenlik gereği prob işlemi **sadece makine IDLE (Boşta)** iken çalıştırılabilir.
+  - **HOME Butonu / Encoder Uzun Basma:** Menüye geri döner.
+
+### 7. WiFi Ayarları ve Cihaz Yönetimi
+FluidNC kontrol kartına kablosuz olarak (TCP Port 23 üzerinden) bağlanmak ve ekran parlaklığını yönetmek için kullanılan menüdür. Girilen tüm değerler ve ayarlar ESP32'nin **kalıcı hafızasına (NVS)** kaydedilir. Cihaz her açıldığında bu bilgilere göre otomatik bağlanmayı dener ve kaydedilen parlaklık seviyesini uygular.
 
 ```text
 ┌─────────────────────────────────────────────────────┐
@@ -409,18 +470,21 @@ FluidNC kontrol kartına kablosuz olarak (TCP Port 23 üzerinden) bağlanmak iç
 │     Sifre Gir                                       │
 │     Oto IP Bul                                      │
 │     Baglan / Kes                                    │
+│     Parlaklik                                       │
 │     Geri Don                                        │
 ├─────────────────────────────────────────────────────┤
 │ AG: MyNetwork                                       │
 └─────────────────────────────────────────────────────┘
 ```
 
-- **Ağ Tara (Scan):** Tıklandığında ortamdaki WiFi ağları taranır. Ağlar, sinyal güçlerine (RSSI / dBm) göre listelenir. Encoder ile bağlanmak istediğiniz ağın üzerine gelip tıklayarak SSID'yi seçmiş olursunuz.
+- **Ağ Tara (Scan):** Tıklandığında ortamdaki WiFi ağları **asenkron olarak (ekran donmadan)** taranır. Ağlar, sinyal güçlerine (RSSI / dBm) göre listelenir. Encoder ile bağlanmak istediğiniz ağın üzerine gelip tıklayarak SSID'yi seçmiş olursunuz.
 - **Şifre Gir:** Ekrandaki karakter tekerleği (harfler, sayılar ve özel karakterler) üzerinden şifre girilir. Encoder çevrilerek karakter seçilir, tıklanarak eklenir. Şifre ekranda gizlenmiş maskeli yapıda gösterilir. 
   - **Silme (Backspace):** Hatalı girişte **Encoder'a uzun basılarak** son karakter silinir.
   - **Kaydetme:** Şifre girişini bitirdiğinizde **EKSEN butonuna** basarak şifreyi kaydedersiniz.
-- **🆕 Oto IP Bul (mDNS):** WiFi bağlantısı kurulu iken bu seçeneğe tıklandığında **mDNS** ile ağdaki FluidNC cihazının IP adresi otomatik aranır. Bulunursa IP kaydedilir ve TCP bağlantısı başlatılır. WiFi bağlı değilse uyarı verir. *(v6.0'da eklendi, eski "IP Ayarla" menüsünün yerini aldı)*
-- **Bağlan / Kes:** Ayarlar tamamlandığında bu seçeneğe tıklayarak TCP bağlantısını başlatabilirsiniz. Bağlantı kurulduğunda ana ekranda yeşil `[WiFi]` simgesi belirir. Bağlantı sırasında mDNS ile IP otomatik keşfedilir ve TCP bağlantısı kurulur.
+- **Oto IP Bul (mDNS):** WiFi bağlantısı kurulu iken bu seçeneğe tıklandığında **mDNS** ile ağdaki FluidNC cihazının IP adresi otomatik aranır. Bulunursa IP kaydedilir ve TCP bağlantısı başlatılır. WiFi bağlı değilse uyarı verir.
+- **Bağlan / Kes:** Ayarlar tamamlandığında bu seçeneğe tıklayarak TCP bağlantısını başlatabilirsiniz. Non-blocking state-machine sayesinde bağlantı sırasında sistem donmaz.
+- **🆕 Parlaklık (PWM):** Tıklandığında ekran arka aydınlatma şiddeti 4 kademede döngüsel olarak değişir (`1/4 (%25)` → `2/4 (%50)` → `3/4 (%75)` → `4/4 (%100)`). Yapılan seçim anında ekrana yansıtılır ve kalıcı hafızaya kaydedilir.
+- **Geri Dön:** Ana menüye döner.
 
 ---
 
@@ -429,22 +493,22 @@ FluidNC kontrol kartına kablosuz olarak (TCP Port 23 üzerinden) bağlanmak iç
 ### Ana Ekran Kontrolleri
 | Kontrol | Fonksiyon |
 |---|---|
-| **Encoder Çevirme** | Seçili eksende jog hareketi yaptırır |
+| **Encoder Çevirme** | Seçili eksende jog hareketi yaptırır. <br>*(Güvenlik: RUN/HOLD/ALARM modlarında istenmeyen hareketleri önlemek için kilitlidir)* |
 | **Encoder Tıklama** | Ana Menüye giriş yapar |
 | **HOME Butonu (Kısa)** | Tüm eksenleri Home'a gönderir (`$H`). Alarm durumunda kilit açar (`$X`). |
 | **HOME Butonu (Uzun 1.5s)**| Cihazın ekranını kapatıp **Derin Uykuya (Deep Sleep)** geçirir. |
 | **ZERO Butonu** | O an aktif olan ekseni sıfırlar (`G92`). Alarm durumunda Soft Reset atar (`0x18`). |
 | **EKSEN Butonu** | **IDLE (Boşta):** X → Y → Z eksenleri arasında sırayla geçiş yapar. <br> **RUN/HOLD:** Override Kısayol Menüsünü açar. |
-| **HIZ/STEP Butonu** | **IDLE:** Step/Hız ayarını değiştirir. <br> **RUN:** Programı Duraklatır (`!`). <br> **HOLD:** Programı devam ettirir (`~`). |
+| **HIZ/STEP Butonu** | **IDLE:** Step/Hız ayarını değiştirir (seçimler NVS'ye kaydedilir). <br> **RUN:** Programı Duraklatır (`!`). <br> **HOLD:** Programı devam ettirir (`~`). |
 
 ### Menü İçi Navigasyon
 | Kontrol | Fonksiyon |
 |---|---|
-| **Encoder Çevirme** | Menü öğeleri, şifre harfleri veya IP oktetleri arasında gezinme |
-| **Encoder Tıklama** | Seçili öğeye gir / onayla / bir sonraki alana geç |
+| **Encoder Çevirme** | Menü öğeleri, şifre harfleri, IP oktetleri veya Probe değerleri arasında gezinme |
+| **Encoder Tıklama** | Seçili öğeye gir / onayla / Probe'da parametre değiştir (Derinlik ↔ Hız) |
 | **Encoder Uzun Basma** | Bir üst menüye geri dön / Şifre ekranında son karakteri sil |
 | **HOME Butonu** | Hangi menüde olursanız olun geri dönmenizi sağlar |
-| **EKSEN Butonu** | Yalnızca WiFi şifre ve IP ekranlarında işlemi onaylayıp kaydetmek için kullanılır |
+| **EKSEN Butonu** | WiFi şifre ekranında kaydetme; **Z Probe ekranında prob hareketini (G38.2) başlatma** |
 | **Sınırsız Bekleme** | Menülerde otomatik çıkış yoktur, çıkmak için HOME veya Encoder'a uzun basana kadar kapanmaz. |
 
 ---
@@ -455,9 +519,9 @@ FluidNC kontrol kartına kablosuz olarak (TCP Port 23 üzerinden) bağlanmak iç
 | Durum | Renk | Açıklama |
 |---|---|---|
 | IDLE | 🟢 Yeşil | Makine boşta |
-| RUN | 🔵 Cyan | Program çalışıyor |
-| HOLD | 🟡 Sarı | Duraklatıldı |
-| ALARM | 🔴 Kırmızı | Alarm durumu |
+| RUN | 🔵 Cyan | Program çalışıyor (jog kilitli) |
+| HOLD | 🟡 Sarı | Duraklatıldı (jog kilitli) |
+| ALARM | 🔴 Kırmızı | Alarm durumu (jog kilitli) |
 | HOME | 🟠 Turuncu | Homing işlemi |
 | JOG | 🔵 Cyan | Jog hareketi |
 | DOOR | 🔴 Kırmızı | Kapı açık |
@@ -474,11 +538,20 @@ FluidNC kontrol kartına kablosuz olarak (TCP Port 23 üzerinden) bağlanmak iç
 
 ## 📁 Dosya Yapısı
 
+v7.0 ile birlikte monolitik kod yapısı, bakım ve geliştirme kolaylığı sağlayan 5 bağımsız modüle ayrılmıştır:
+
 ```
-CNC_Pendant/
-├── CNC_pendant_v5.0 wifi.ino # Ana pendant kodu (v6.0)
-├── config.yaml               # FluidNC yapılandırma dosyası
-└── README.md                 # Bu dosya
+CNC_pendant_v7.0 wifi/
+├── 3D Boyutlu Tasarım Dosyası/
+├── CNC_pendant_v7.0 wifi/
+│   └── CNC_pendant_v7_0_wifi/
+│       ├── CNC_pendant_v7_0_wifi.ino # Ana orchestrator (setup, loop, durum makineleri)
+│       ├── config.h                  # Pin, renk, sabitler, enum ve struct tanımları
+│       ├── input.h / input.cpp       # Encoder ISR, buton debounce, kısa/uzun basma
+│       ├── fluidnc.h / fluidnc.cpp   # UART/TCP komut gönderimi, status parse, realtime
+│       ├── wifi_mgr.h / wifi_mgr.cpp # WiFi bağlantı state machine, async scan, mDNS, NVS
+│       └── display.h / display.cpp   # ST7789 TFT ekran çizimi, partial update, gauge'ler
+└── README.md                         # Proje dokümantasyonu
 ```
 
 ---
@@ -504,7 +577,8 @@ D11 ← MOSI          D3 ← DT            D5 ← ZERO
 D10 ← CS            A0 ← SW            A6 ← EKSEN
 D6  ← DC            GND ← GND          A7 ← HIZ
 D7  ← RST
-3V3 ← BLK/VCC
+A2  ← BLK (PWM)
+3V3 ← VCC
 GND ← GND
 ```
 
