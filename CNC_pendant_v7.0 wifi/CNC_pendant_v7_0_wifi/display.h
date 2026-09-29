@@ -46,3 +46,10 @@ void drawWifiIPScreen();
 
 // Z Probe (#18)
 void drawProbeScreen();
+
+// SD Kart (#21) & Is Takibi
+void drawSdListScreen();
+void drawSdPreviewScreen();
+void drawJobProgressScreen();
+void updateJobProgressDisplay();
+void updateFooterProgress();

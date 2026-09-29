@@ -3,7 +3,7 @@
 **Arduino Nano ESP32 tabanlı (farklı mikroişlemci kullanabilirsiniz), ST7789 TFT ekranlı, FluidNC uyumlu CNC kumanda paneli.**
 
 > Tasarım & Geliştirme: **VOLTveTORK**  
-> Sürüm: **v7.0** — Modüler Mimari, Non-blocking Yapı, Z Probe Desteği, PWM Ekran Parlaklığı, NVS Ayar Kalıcılığı, Asenkron WiFi Tarama, Gelişmiş Güvenlik & Performans İyileştirmeleri
+> Sürüm: **v7.0** — Modüler Mimari, SD Kart G-Code Çalıştırma & Canlı İlerleme Takibi, NVS Durdurma Noktası Kayıt Sistemi, Z Probe Desteği, PWM Ekran Parlaklığı, Asenkron WiFi Tarama, Gelişmiş Güvenlik & Performans İyileştirmeleri
 
 ---
 
@@ -26,6 +26,12 @@
 - ✅ **Gelişmiş Güvenlik:** RUN, HOLD ve ALARM durumlarında kazara hareketi önleyen jog kilidi
 - ✅ Popup bildirimleri (non-blocking)
 - ✅ **Alt menülerde sınırsız bekleme süresi** (Otomatik çıkış kaldırıldı)
+- ✅ **SD Kart Dosya Gezgini** (`$SD/List` & `$SD/Run` ile doğrudan pendant üzerinden G-code dosya listeleme ve çalıştırma)
+- ✅ **G-Code Ön İzleme Ekranı** (SD karttaki dosyanın G-code satırlarını kaydırmalı olarak görüntüleme ve AXIS butonuyla başlatma)
+- ✅ **Canlı İş İlerleme Ekranı (SCR_JOB_PROGRESS)** (İlerleme çubuğu, yüzde, senkron aktif G-code satırı, Feed ve Spindle bilgileri ile anlık takip)
+- ✅ **Durdurma Noktası Kayıt Sistemi (NVS Flash)** (Duraklatma veya Alarm anında kalınan satır no, G-code komutu, WPos koordinatları ve dosya adı kalıcı belleğe kaydedilir)
+- ✅ **SPEED Butonu ile Duraklat / Devam Et** (Kesim anında Feed Hold `!` ile duraklatma ve Cycle Start `~` ile devam)
+- ✅ **Kesim Anı Tuş Güvenliği** (Kesim sırasında yanlışlıkla basılmaları önlemek için ZERO tuşu ve Jog kilitlenir)
 
 ### 🆕 v7.0 — Modüler Mimari, Non-blocking Yapı, Z Probe ve Performans İyileştirmeleri
 
@@ -42,6 +48,11 @@
 | **RUN/HOLD Modunda İstem Dışı Jog** | Makine çalışırken encoder'a yanlışlıkla dokunulması iş parçasına çarpma riski doğuruyordu. | `ST_RUN`, `ST_HOLD` ve `ST_ALARM` durumlarında encoder jog komutları **yazılımsal olarak engellendi**. |
 | **Yeniden Başlatmada Ayar Kaybı** | Cihaz kapatıldığında step, hız, eksen ve ekran ayarları varsayılana dönüyordu. | **Preferences (NVS)** API'si ile ayarlar kalıcı hafızaya kaydedildi; açılışta otomatik geri yüklenir. |
 | **Monolitik Kod Karmaşası** | 2400+ satırlık tek `.ino` dosyası kodun bakımını, takibini ve geliştirilmesini zorlaştırıyordu. | Kod **5 modüle ayrıldı** (`config`, `input`, `fluidnc`, `wifi_mgr`, `display`). |
+| **SD Kart Dosya Başlatma** | SD karttaki G-code dosyaları pendant üzerinden görüntülenemiyor ve başlatılamıyordu. | FluidNC `$SD/List` ve `$SD/Run` entegrasyonu sağlandı; menüye **SD Kart Dosya Gezgini** ve **Ön İzleme** eklendi. |
+| **G-Code İlerleme & Satır Takibi** | Kesim sırasında makinenin hangi satırda olduğu ve dosya ilerlemesi kumanda ekranında izlenemiyordu. | **Canlı İş İlerleme Ekranı** (`SCR_JOB_PROGRESS`) geliştirildi; `Ln:` veya `sdPercent` ile senkron aktif G-code satır gösterimi sağlandı. |
+| **Durdurma Anında Bilgi Kaybı** | Acil durdurma, duraklatma veya alarmlarda işin nerede kaldığı bilinemiyordu. | **NVS Kalıcı Durdurma Noktası Kaydı** eklendi; dosya adı, satır numarası, o satırdaki G-code komutu ve koordinatlar Flash hafızaya kaydedilir. |
+| **E-Stop / Alarm Anında Çökme** | Acil stop butonuna basıldığında pendant çöküyor ve bootloop döngüsüne giriyordu. | Format hatası (`%%.1f`) ve `prefs.begin()` güvenlik kontrolleri düzeltildi, çökme riski tamamen ortadan kaldırıldı. |
+| **Kesim Anında Yanlışlıkla Sıfırlama** | Kesim sırasında ZERO tuşuna basılması parça sıfırını bozabilirdi. | `ST_RUN` ve `ST_HOLD` durumlarında ZERO butonu yazılımsal olarak devre dışı bırakıldı. |
 
 #### ✨ Yeni Eklenen Özellikler
 
@@ -51,6 +62,17 @@
 - ✅ **RUN/HOLD Jog Kilidi (#1)** — İşleme veya alarm durumlarında istenmeyen fiziksel jog hareketlerini engelleyen güvenlik koruması.
 - ✅ **Float Epsilon Karşılaştırma (#8)** — Pozisyon değişimlerinde hassas floating point karşılaştırması (`fabsf(a-b) > 0.0005`).
 - ✅ **Merkezi MachineState Enum (#13)** — String karşılaştırmaları yerine enum mimarisi ile maksimum hız ve güvenilirlik.
+- ✅ **SD Kart Dosya Gezgini (`$SD/List` & `$SD/Run`)** — UART veya WiFi üzerinden SD karttaki `.nc`, `.gcode` dosyaları listelenir, encoder ile seçilir.
+- ✅ **G-Code Ön İzleme Ekranı (`SCR_SD_PREVIEW`)** — SD karttaki dosyaya tıklandığında hemen başlatılmaz; G-code satırları kaydırmalı olarak incelenir, EKSEN (AXIS) butonu ile başlatılır.
+- ✅ **Canlı İş İlerleme ve Takip Ekranı (`SCR_JOB_PROGRESS`)** — İş başlatıldığında otomatik açılır:
+  - Duruma göre renkli başlık (İŞ ÇALIŞIYOR / DURAKLATILDI / ALARM DURUMU!)
+  - Dinamik ilerleme çubuğu (yüzde ve anlık satır / toplam satır sayısı)
+  - Feed hızı, Spindle devri ve dosya adı göstergesi
+  - Makine hareketiyle senkron olarak kayan canlı G-code satırları
+  - HOME butonu ile ana menüye dönülebilir, menüden tekrar ilerleme ekranına girilebilir
+- ✅ **Durdurma Noktası Kayıt Sistemi (NVS Flash)** — Kesim anında SPEED ile duraklatıldığında veya beklenmedik bir E-Stop/Alarm oluştuğunda dosya adı, kalınan satır, o satırdaki G-code komutu, WPos koordinatları kalıcı hafızaya yazılır. Cihaz kapansa bile silinmez.
+- ✅ **E-Stop / Alarm Güvenliği ve Çökme Koruması** — Bellek taşması ve `printf` formatlama hataları giderilerek E-Stop anındaki reset/çökme sorunu tamamen çözüldü.
+- ✅ **Kesim Anında ZERO Tuşu Güvenlik Kilidi** — Kesim esnasında (`ST_RUN`, `ST_HOLD`) ZERO butonuna basılsa bile koordinat sıfırlama engellendi.
 
 ### v6.0 — mDNS Otomatik IP Keşfi, TCP Donma Çözümü, UART Öncelikli İletişim
 
@@ -459,7 +481,76 @@ Takım boyu veya iş parçası sıfırlama işlemlerini pendant üzerinden doğr
   - **EKSEN (AXIS) Butonu:** Probu başlatır (`G38.2 Z{derinlik} F{hiz}`). Güvenlik gereği prob işlemi **sadece makine IDLE (Boşta)** iken çalıştırılabilir.
   - **HOME Butonu / Encoder Uzun Basma:** Menüye geri döner.
 
-### 7. WiFi Ayarları ve Cihaz Yönetimi
+### 7. SD Kart Dosya Gezgini ve G-Code Ön İzleme
+Kumanda ana menüsünden **SD Kart** seçeneğine tıklandığında FluidNC'ye `$SD/List` komutu gönderilir ve karttaki G-code dosyaları ekranda listelenir:
+
+```text
+┌─────────────────────────────────────────────────────┐
+│ SD KART DOSYALARI                                   │
+├─────────────────────────────────────────────────────┤
+│   > PARCA_1.NC                                      │
+│     ROUTER_TEST.GCODE                               │
+│     DENEME.NC                                       │
+│     TABLA_DUZLEME.NC                                │
+├─────────────────────────────────────────────────────┤
+│    Encoder: Sec  |  Tikla: On Izle  |  HOME: Geri   │
+└─────────────────────────────────────────────────────┘
+```
+
+- **G-Code Ön İzleme:** Listeden bir dosyaya tıklandığında dosya doğrudan çalıştırılmaz; önce **Ön İzleme Ekranı** açılır. Bu ekranda dosyanın içindeki G-code satırları listelenir:
+  - **Encoder Çevirme:** Satırlar arasında yukarı / aşağı kaydırma yapar.
+  - **EKSEN (AXIS) Butonu:** Dosyayı çalıştırmayı başlatır (`$SD/Run=/dosya_adi.nc`).
+  - **HOME Butonu:** Listeye geri döner.
+
+```text
+┌─────────────────────────────────────────────────────┐
+│ ON IZLEME: PARCA_1.NC                               │
+├─────────────────────────────────────────────────────┤
+│   1: G21 G90 G17                                    │
+│   2: G0 Z15.000                                     │
+│   3: M3 S12000                                      │
+│ > 4: G0 X0.000 Y0.000                               │
+│   5: G1 Z-1.500 F300                                │
+├─────────────────────────────────────────────────────┤
+│     AXIS: Baslat  |  Cevir: Kaydir  |  HOME: Geri   │
+└─────────────────────────────────────────────────────┘
+```
+
+### 8. Canlı İş İlerleme Ekranı (SCR_JOB_PROGRESS)
+SD karttan veya harici bir göndericiden (PC, WebUI vb.) bir iş başlatıldığında kumanda otomatik olarak **İş İlerleme Ekranı**na geçer:
+
+```text
+┌─────────────────────────────────────────────────────┐
+│ IS CALISIYOR                              [RUN] 64% │
+├─────────────────────────────────────────────────────┤
+│ Dosya: PARCA_1.NC                                   │
+│ Satir: 1420 / 2218                  [=========>   ] │
+│ Feed:  1200 mm/dk        Spindle: 14000 RPM         │
+├─────────────────────────────────────────────────────┤
+│   1418: G1 X45.200 Y12.400                          │
+│   1419: G1 X46.800 Y12.900                          │
+│ > 1420: G1 X48.500 Y13.500 F1200                    │
+│   1421: G1 X50.000 Y14.100                          │
+├─────────────────────────────────────────────────────┤
+│  SPEED: Duraklat | HOME: Ana Menu | AXIS: Override  │
+└─────────────────────────────────────────────────────┘
+```
+
+- **Canlı Satır Senkronizasyonu:** Makine işledikçe ekrandaki aktif satır vurgulanarak ilerler. FluidNC'den `Ln:` bilgisi gelmediği durumlarda SD ilerleme yüzdesi üzerinden akıllı hesaplama yapılarak satır kaydırma makineyle tam senkron çalışır.
+- **SPEED Butonu:** Kesim anında basıldığında programı duraklatır (`!`) ve kalınan yeri NVS hafızaya kaydeder. Tekrar basıldığında (`~`) devam ettirir.
+- **HOME Butonu:** İlerleme ekranından ana menüye dönmenizi sağlar; iş arka planda çalışmaya devam eder ve menüden tekrar ilerleme sayfasına dönülebilir.
+
+### 9. NVS Durdurma Noktası Kayıt Sistemi (Kaldığı Yer Bildirimi)
+İşleme sırasında SPEED ile duraklatıldığında veya beklenmedik bir acil durum/alarm (E-Stop, limit switch tetiklenmesi vb.) meydana geldiğinde, pendant o anki durumu ESP32'nin **kalıcı Flash belleğine (NVS)** kaydeder:
+- Dosya adı
+- Kalınan G-code satır numarası
+- O satırdaki G-code komut metni
+- WPos (İş Koordinatları: X, Y, Z)
+- İlerleme yüzdesi (%)
+
+Pendant yeniden başlatılsa dahi bu bilgiler silinmez. Ekranda kalınan noktayı gösteren bilgi kartı açılır; böylece kullanıcı işi hangi koordinat ve satırdan devam ettireceğini güvenle bilir.
+
+### 10. WiFi Ayarları ve Cihaz Yönetimi
 FluidNC kontrol kartına kablosuz olarak (TCP Port 23 üzerinden) bağlanmak ve ekran parlaklığını yönetmek için kullanılan menüdür. Girilen tüm değerler ve ayarlar ESP32'nin **kalıcı hafızasına (NVS)** kaydedilir. Cihaz her açıldığında bu bilgilere göre otomatik bağlanmayı dener ve kaydedilen parlaklık seviyesini uygular.
 
 ```text
@@ -497,9 +588,9 @@ FluidNC kontrol kartına kablosuz olarak (TCP Port 23 üzerinden) bağlanmak ve 
 | **Encoder Tıklama** | Ana Menüye giriş yapar |
 | **HOME Butonu (Kısa)** | Tüm eksenleri Home'a gönderir (`$H`). Alarm durumunda kilit açar (`$X`). |
 | **HOME Butonu (Uzun 1.5s)**| Cihazın ekranını kapatıp **Derin Uykuya (Deep Sleep)** geçirir. |
-| **ZERO Butonu** | O an aktif olan ekseni sıfırlar (`G92`). Alarm durumunda Soft Reset atar (`0x18`). |
+| **ZERO Butonu** | **IDLE:** O an aktif olan ekseni sıfırlar (`G92`). <br> **ALARM:** Soft Reset atar (`0x18`). <br> **RUN/HOLD:** İşlev devre dışı (kazara sıfırlama/iş bozulmasını önleme kilidi). |
 | **EKSEN Butonu** | **IDLE (Boşta):** X → Y → Z eksenleri arasında sırayla geçiş yapar. <br> **RUN/HOLD:** Override Kısayol Menüsünü açar. |
-| **HIZ/STEP Butonu** | **IDLE:** Step/Hız ayarını değiştirir (seçimler NVS'ye kaydedilir). <br> **RUN:** Programı Duraklatır (`!`). <br> **HOLD:** Programı devam ettirir (`~`). |
+| **HIZ/STEP (SPEED) Butonu** | **IDLE:** Step/Hız ayarını değiştirir (seçimler NVS'ye kaydedilir). <br> **RUN:** Programı Duraklatır (`!`) ve kaldığı noktayı NVS Flash hafızaya kaydeder. <br> **HOLD:** Programı devam ettirir (`~`). |
 
 ### Menü İçi Navigasyon
 | Kontrol | Fonksiyon |
@@ -550,7 +641,7 @@ CNC_pendant_v7.0 wifi/
 │       ├── input.h / input.cpp       # Encoder ISR, buton debounce, kısa/uzun basma
 │       ├── fluidnc.h / fluidnc.cpp   # UART/TCP komut gönderimi, status parse, realtime
 │       ├── wifi_mgr.h / wifi_mgr.cpp # WiFi bağlantı state machine, async scan, mDNS, NVS
-│       └── display.h / display.cpp   # ST7789 TFT ekran çizimi, partial update, gauge'ler
+│       └── display.h / display.cpp   # ST7789 TFT ekran çizimi, partial update, gauge'ler, SD gezgini & ilerleme ekranı
 └── README.md                         # Proje dokümantasyonu
 ```
 

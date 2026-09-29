@@ -78,6 +78,9 @@ struct Status {
   uint8_t feedOv;    // Feed override %
   uint8_t rapidOv;   // Rapid override %
   uint8_t spindleOv; // Spindle override %
+  uint8_t alarmCode;  // Alarm kodu (1-10)
+  float sdPercent;    // SD kart ilerleme yuzdesi (0.0 - 100.0)
+  uint32_t sdLine;    // G-code satir no
 };
 
 // ─── BUTON STRUCT ─────────────────────────────────────
@@ -103,7 +106,10 @@ enum ScreenState {
   SCR_FEED_OV,
   SCR_SPINDLE_OV,
   SCR_OVERRIDE_SEL,
-  SCR_PROBE          // #18 Z Probe
+  SCR_PROBE,         // #18 Z Probe
+  SCR_SD_LIST,        // #21 SD Kart dosya listesi
+  SCR_SD_PREVIEW,     // SD Kart dosya onizleme & baslatma onayi
+  SCR_JOB_PROGRESS,   // Canli is takibi ve ilerleme ekrani
 };
 
 // ─── POPUP STRUCT (#4 non-blocking) ──────────────────
@@ -112,6 +118,11 @@ struct PopupState {
   unsigned long startMs;
   unsigned long durMs;
 };
+
+// POPUP SURE SABITLERI
+#define POPUP_DUR_FAST    600
+#define POPUP_DUR_NORMAL  800
+#define POPUP_DUR_LONG    1000
 
 // ─── WiFi BAĞLANTI STATE MACHINE (#5) ────────────────
 enum WifiConnState { WCS_IDLE, WCS_CONNECTING, WCS_CONNECTED, WCS_FAILED };
@@ -160,10 +171,22 @@ static const uint8_t BRIGHTNESS_VAL[] = {64, 128, 192, 255};
 #define PROBE_RETRACT_DEFAULT 5
 #define PROBE_RETRACT_MIN     1
 #define PROBE_RETRACT_MAX     50
+#define PROBE_PLATE_DEFAULT   2    // Plaka kalinligi (mm)
+#define PROBE_PLATE_MIN       0
+#define PROBE_PLATE_MAX       20
+
+// PARCA SIFIRINA GIT (GO TO ZERO)
+#define GOTO_ZERO_Z_CLEARANCE 10
+#define GOTO_ZERO_FEED        3000
+
+// SD KART
+#define SD_MAX_FILES 8
+#define SD_PREVIEW_MAX_LINES 200
+#define SD_PREVIEW_LINE_LEN  36
 
 // ─── MENÜ SAYILARİ ───────────────────────────────────
-#define MENU_IDLE_COUNT 6   // IDLE: Spindle, Jog, Step, Sogutma, Z Probe, WiFi
-#define MENU_RUN_COUNT  5   // RUN/HOLD: SpindleOv, FeedOv, Jog, Step, Sogutma
+#define MENU_IDLE_COUNT 8   // IDLE: Spindle, Jog, Step, Sogutma, Sifira Git, Z Probe, SD Kart, WiFi
+#define MENU_RUN_COUNT  6   // RUN/HOLD: SpindleOv, FeedOv, Jog, Step, Sogutma
 #define WIFI_MENU_COUNT 6   // Ag Tara, Sifre, Oto IP, Baglan, Parlaklik, Geri
 
 // ─── PENDANT AYAR DİZİLERİ ───────────────────────────
@@ -223,6 +246,34 @@ extern int probeDepth;
 extern int probeFeed;
 extern int probeRetract;
 extern uint8_t probeParamIdx;
+extern int probePlate;
+
+// SD Kart (#21)
+extern String sdFiles[SD_MAX_FILES];
+extern int sdFileCount;
+extern int sdSelIdx;
+extern bool sdListPending;
+extern String sdSelectedFile;
+extern String sdPreviewLines[SD_PREVIEW_MAX_LINES];
+extern int sdPreviewLineCount;
+extern int sdTotalLineCount;
+extern bool sdShowPending;
+
+// --- DURDURULAN IS KAYIT BILGISI (NVS) ---
+struct StoppedJobInfo {
+  bool valid;
+  char fileName[48];
+  float percent;
+  uint32_t line;
+  float x, y, z;
+  uint8_t alarmCode;
+  char gcode[40];
+};
+extern StoppedJobInfo lastStoppedJob;
+extern int sdPreviewScroll;
+extern bool sdJobRunningView;
+void saveStoppedJob(const char* file, float percent, uint32_t line, float x, float y, float z, uint8_t alarm = 0, const char* gcode = nullptr);
+void loadStoppedJob();
 
 // ─── FORWARD DECLARATIONS ─────────────────────────────
 // (Tanımları .ino dosyasında)

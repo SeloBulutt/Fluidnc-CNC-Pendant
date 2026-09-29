@@ -84,6 +84,7 @@ int probeDepth = PROBE_DEPTH_DEFAULT;
 int probeFeed = PROBE_FEED_DEFAULT;
 int probeRetract = PROBE_RETRACT_DEFAULT;
 uint8_t probeParamIdx = 0;  // 0=derinlik, 1=hız, 2=geri çekilme
+int probePlate = PROBE_PLATE_DEFAULT;
 
 
 // ═══════════════════════════════════════════════════════
@@ -192,6 +193,7 @@ void setup() {
   // Ayarları yükle
   wifiLoadPrefs();
   loadUserPrefs();  // #20 step/feed/axis/brightness
+  loadStoppedJob(); // Durdurulan son is kaydini yukle
 
   // #19 Parlaklık ayarla (PWM)
   analogWrite(TFT_BLK, BRIGHTNESS_VAL[brightnessIdx]);
@@ -269,9 +271,9 @@ void loop() {
   if (wcsState == WCS_CONNECTING) {
     WifiConnState st = wifiConnectUpdate();
     if (st == WCS_CONNECTED) {
-      showPopup("WIFI BAGLANDI!", C_GREEN, 1000);
+      showPopup("WIFI BAGLANDI!", C_GREEN, POPUP_DUR_LONG);
     } else if (st == WCS_FAILED) {
-      showPopup("WIFI BASARISIZ!", C_RED, 1000);
+      showPopup("WIFI BASARISIZ!", C_RED, POPUP_DUR_LONG);
     }
   }
 
@@ -330,7 +332,7 @@ void loop() {
   if (noDataDuration > SLEEP_WARNING_MS && !sleepWarningShown &&
       scrState == SCR_MAIN) {
     sleepWarningShown = true;
-    showPopup("UYKU: 5 SN...", C_ORANGE, 500);
+    showPopup("UYKU: 5 SN...", C_ORANGE, POPUP_DUR_NORMAL);
   }
   // 2 dakika doldu → deep sleep
   if (noDataDuration > SLEEP_TIMEOUT_MS) {
@@ -359,13 +361,15 @@ void loop() {
       scrState != SCR_WIFI_IP && scrState != SCR_WIFI_MENU &&
       scrState != SCR_WIFI_SCAN && scrState != SCR_FEED_OV &&
       scrState != SCR_SPINDLE_OV && scrState != SCR_OVERRIDE_SEL &&
-      scrState != SCR_PROBE) {
+      scrState != SCR_PROBE && scrState != SCR_SD_LIST && scrState != SCR_SD_PREVIEW && scrState != SCR_JOB_PROGRESS) {
     for (int i = 1; i < 4; i++) btns[i].fired = false;
     switchScreen(SCR_MAIN);
   }
 
   // 10 saniye timeout → ana ekrana dön
-  if (scrState != SCR_MAIN && (millis() - lastActivity > MENU_TIMEOUT_MS)) {
+  // Timeout -> ana ekrana don (SD kart ve Prob ekraninda zaman asimi yok)
+  if (scrState != SCR_MAIN && scrState != SCR_SD_LIST && scrState != SCR_SD_PREVIEW && scrState != SCR_PROBE && scrState != SCR_JOB_PROGRESS &&
+      (millis() - lastActivity > MENU_TIMEOUT_MS)) {
     switchScreen(SCR_MAIN);
   }
 
@@ -385,13 +389,13 @@ void loop() {
       if (cur.state == ST_RUN || cur.state == ST_JOG) {
         btns[3].fired = false;
         fcSendRealtime('!');  // #14 merkezi fonksiyon
-        showPopup("DURAKLANDI", C_YELLOW, 600);
+        showPopup("DURAKLANDI", C_YELLOW, POPUP_DUR_NORMAL);
         Serial.println("[PENDANT] Feed Hold sent");
         needRedraw = true;
       } else if (cur.state == ST_HOLD) {
         btns[3].fired = false;
         fcSendRealtime('~');  // #14 merkezi fonksiyon
-        showPopup("DEVAM EDILIYOR", C_GREEN, 600);
+        showPopup("DEVAM EDILIYOR", C_GREEN, POPUP_DUR_NORMAL);
         Serial.println("[PENDANT] Cycle Start sent");
         needRedraw = true;
       }
@@ -403,7 +407,7 @@ void loop() {
       if (btns[1].fired) {
         btns[1].fired = false;
         fcSendRealtime(0x18);  // #14 merkezi fonksiyon
-        showPopup("SOFT RESET!", C_ORANGE, 1000);
+        showPopup("SOFT RESET!", C_ORANGE, POPUP_DUR_LONG);
         Serial.println("[PENDANT] Soft Reset sent (0x18)");
         needRedraw = true;
       }
@@ -411,7 +415,7 @@ void loop() {
       if (btns[0].fired) {
         btns[0].fired = false;
         fcSend("$X");
-        showPopup("KILIT ACILDI", C_GREEN, 800);
+        showPopup("KILIT ACILDI", C_GREEN, POPUP_DUR_LONG);
         Serial.println("[PENDANT] Alarm unlock ($X) sent");
         needRedraw = true;
       }
@@ -435,14 +439,14 @@ void loop() {
     if (btns[0].fired) {
       btns[0].fired = false;
       fcHome();
-      showPopup("HOMING...", C_ORANGE, 300);
+      showPopup("HOMING...", C_ORANGE, POPUP_DUR_NORMAL);
     }
-    if (btns[1].fired) {
+        if (btns[1].fired) {
       btns[1].fired = false;
       fcZero(selAxis);
       char msg[10];
       snprintf(msg, sizeof(msg), "ZERO %s", AXIS_STR[selAxis]);
-      showPopup(msg, C_GREEN, 400);
+      showPopup(msg, C_GREEN, POPUP_DUR_NORMAL);
     }
     if (btns[2].fired) {
       btns[2].fired = false;
@@ -499,11 +503,12 @@ void loop() {
       if (runMode) {
         // RUN/HOLD menüsü
         switch (menuIdx) {
-          case 0: switchScreen(SCR_SPINDLE_OV); break;
-          case 1: switchScreen(SCR_FEED_OV);    break;
-          case 2: switchScreen(SCR_JOG);        break;
-          case 3: switchScreen(SCR_STEP);       break;
-          case 4: switchScreen(SCR_COOLANT);    break;
+          case 0: switchScreen(SCR_JOB_PROGRESS); break;
+          case 1: switchScreen(SCR_SPINDLE_OV);  break;
+          case 2: switchScreen(SCR_FEED_OV);     break;
+          case 3: switchScreen(SCR_JOG);         break;
+          case 4: switchScreen(SCR_STEP);        break;
+          case 5: switchScreen(SCR_COOLANT);     break;
         }
       } else {
         // IDLE menüsü (#18 Z Probe eklendi)
@@ -515,16 +520,29 @@ void loop() {
           case 1: switchScreen(SCR_JOG);        break;
           case 2: switchScreen(SCR_STEP);       break;
           case 3: switchScreen(SCR_COOLANT);    break;
-          case 4: switchScreen(SCR_PROBE);      break;  // #18
-          case 5:
+          case 4:  // Parca Sifirina Git
+            if (cur.state == ST_IDLE) {
+              fcGoToZero();
+              showPopup("SIFIRA GIDIYOR", C_GREEN, POPUP_DUR_LONG);
+            } else {
+              showPopup("SADECE IDLE!", C_RED, POPUP_DUR_NORMAL);
+            }
+            switchScreen(SCR_MAIN);
+            break;
+          case 5: switchScreen(SCR_PROBE);      break;  // Z Probe
+          case 6:
+            fcSdList();
+            switchScreen(SCR_SD_LIST);
+            break;  // SD Kart
+          case 7:
             wifiMenuIdx = 0;
             switchScreen(SCR_WIFI_MENU);
-            break;
+            break;  // WiFi
         }
       }
       break;
     }
-    if (needRedraw) drawMenuScreen();
+    if (needRedraw && !popupState.active) drawMenuScreen();
     break;
   }
 
@@ -583,11 +601,11 @@ void loop() {
     if (encClicked) {
       encClicked = false;
       saveUserPrefs();  // #20 kalıcılık
-      showPopup("JOG HIZI SECILDI", C_GREEN, 300);
+      showPopup("JOG HIZI SECILDI", C_GREEN, POPUP_DUR_NORMAL);
       switchScreen(SCR_MENU);
       break;
     }
-    if (needRedraw) drawJogScreen();
+    if (needRedraw && !popupState.active) drawJogScreen();
     break;
   }
 
@@ -608,11 +626,11 @@ void loop() {
     if (encClicked) {
       encClicked = false;
       saveUserPrefs();  // #20 kalıcılık
-      showPopup("STEP SECILDI", C_GREEN, 300);
+      showPopup("STEP SECILDI", C_GREEN, POPUP_DUR_NORMAL);
       switchScreen(SCR_MENU);
       break;
     }
-    if (needRedraw) drawStepScreen();
+    if (needRedraw && !popupState.active) drawStepScreen();
     break;
   }
 
@@ -637,11 +655,11 @@ void loop() {
         case 1: fcSend("M8"); break;
         case 2: fcSend("M7"); break;
       }
-      showPopup(COOL_STR[coolantSel], C_DKGREEN, 500);
+      showPopup(COOL_STR[coolantSel], C_DKGREEN, POPUP_DUR_NORMAL);
       switchScreen(SCR_MENU);
       break;
     }
-    if (needRedraw) drawCoolantScreen();
+    if (needRedraw && !popupState.active) drawCoolantScreen();
     break;
   }
 
@@ -669,7 +687,7 @@ void loop() {
     if (encClicked) {
       encClicked = false;
       sendFeedOvReset();  // %100'e sıfırla
-      showPopup("FEED %100 RESET", C_GREEN, 400);
+      showPopup("FEED %100 RESET", C_GREEN, POPUP_DUR_NORMAL);
       Serial.println("[OV] Feed override reset to 100%");
       lastActivity = millis();
       needRedraw = true;
@@ -707,7 +725,7 @@ void loop() {
     if (encClicked) {
       encClicked = false;
       sendSpnOvReset();  // %100'e sıfırla
-      showPopup("SPINDLE %100 RESET", C_GREEN, 400);
+      showPopup("SPINDLE %100 RESET", C_GREEN, POPUP_DUR_NORMAL);
       Serial.println("[OV] Spindle override reset to 100%");
       lastActivity = millis();
       needRedraw = true;
@@ -739,7 +757,7 @@ void loop() {
       else switchScreen(SCR_SPINDLE_OV);
       break;
     }
-    if (needRedraw) drawOverrideSelScreen();
+    if (needRedraw && !popupState.active) drawOverrideSelScreen();
     break;
   }
 
@@ -761,7 +779,7 @@ void loop() {
       encClicked = false;
       switch (wifiMenuIdx) {
         case 0:  // Ağ Tara (#6 async)
-          showPopup("Taraniyor...", C_CYAN, 200);
+          showPopup("Taraniyor...", C_CYAN, POPUP_DUR_NORMAL);
           wifiStartScanAsync();
           switchScreen(SCR_WIFI_SCAN);
           break;
@@ -772,17 +790,17 @@ void loop() {
           break;
         case 2: {  // Oto IP Bul (mDNS)
           if (!wifiConnected) {
-            showPopup("ONCE WIFI BAGLA!", C_RED, 1000);
+            showPopup("ONCE WIFI BAGLA!", C_RED, POPUP_DUR_LONG);
           } else {
-            showPopup("IP Araniyor...", C_CYAN, 200);
+            showPopup("IP Araniyor...", C_CYAN, POPUP_DUR_NORMAL);
             if (mdnsDiscoverFluidNC()) {
               char ipMsg[24];
               snprintf(ipMsg, sizeof(ipMsg), "IP: %d.%d.%d.%d",
                        wifiIP[0], wifiIP[1], wifiIP[2], wifiIP[3]);
-              showPopup(ipMsg, C_GREEN, 1500);
+              showPopup(ipMsg, C_GREEN, POPUP_DUR_LONG);
               tcpStartConnection();
             } else {
-              showPopup("BULUNAMADI!", C_RED, 1000);
+              showPopup("BULUNAMADI!", C_RED, POPUP_DUR_LONG);
             }
           }
           needRedraw = true;
@@ -791,9 +809,9 @@ void loop() {
         case 3:  // Bağlan / Kes (#5 non-blocking)
           if (wifiConnected) {
             wifiDisconnect();
-            showPopup("BAGLANTI KESILDI", C_RED, 800);
+            showPopup("BAGLANTI KESILDI", C_RED, POPUP_DUR_NORMAL);
           } else {
-            showPopup("Baglaniyor...", C_CYAN, 500);
+            showPopup("Baglaniyor...", C_CYAN, POPUP_DUR_NORMAL);
             wifiConnectStart();  // #5 non-blocking
           }
           needRedraw = true;
@@ -805,7 +823,7 @@ void loop() {
           char bMsg[20];
           snprintf(bMsg, sizeof(bMsg), "PARLAKLIK: %d/%d",
                    brightnessIdx + 1, BRIGHTNESS_LEVELS);
-          showPopup(bMsg, C_CYAN, 600);
+          showPopup(bMsg, C_CYAN, POPUP_DUR_NORMAL);
           needRedraw = true;
           break;
         }
@@ -815,7 +833,7 @@ void loop() {
       }
       break;
     }
-    if (needRedraw) drawWifiMenuScreen();
+    if (needRedraw && !popupState.active) drawWifiMenuScreen();
     break;
   }
 
@@ -846,12 +864,12 @@ void loop() {
         char msg[32];
         snprintf(msg, sizeof(msg), "AG: %s",
                  wifiSSID.substring(0, 14).c_str());
-        showPopup(msg, C_GREEN, 800);
+        showPopup(msg, C_GREEN, POPUP_DUR_NORMAL);
         switchScreen(SCR_WIFI_MENU);
       }
       break;
     }
-    if (needRedraw) drawWifiScanScreen();
+    if (needRedraw && !popupState.active) drawWifiScanScreen();
     break;
   }
 
@@ -885,11 +903,11 @@ void loop() {
       btns[2].fired = false;
       wifiPass = passBuffer;
       wifiSavePrefs();
-      showPopup("SIFRE KAYDEDILDI", C_GREEN, 800);
+      showPopup("SIFRE KAYDEDILDI", C_GREEN, POPUP_DUR_NORMAL);
       switchScreen(SCR_WIFI_MENU);
       break;
     }
-    if (needRedraw) drawWifiPassScreen();
+    if (needRedraw && !popupState.active) drawWifiPassScreen();
     break;
   }
 
@@ -925,11 +943,11 @@ void loop() {
       char ipStr[20];
       snprintf(ipStr, sizeof(ipStr), "IP: %d.%d.%d.%d",
                wifiIP[0], wifiIP[1], wifiIP[2], wifiIP[3]);
-      showPopup(ipStr, C_GREEN, 1000);
+      showPopup(ipStr, C_GREEN, POPUP_DUR_LONG);
       switchScreen(SCR_WIFI_MENU);
       break;
     }
-    if (needRedraw) drawWifiIPScreen();
+    if (needRedraw && !popupState.active) drawWifiIPScreen();
     break;
   }
 
@@ -950,17 +968,22 @@ void loop() {
         // Hız ayarla (10'ar artış)
         probeFeed += delta * 10;
         probeFeed = constrain(probeFeed, PROBE_FEED_MIN, PROBE_FEED_MAX);
-      } else {
+      } else if (probeParamIdx == 2) {
         // Geri çekilme ayarla (1 mm artış)
         probeRetract += delta;
         probeRetract = constrain(probeRetract, PROBE_RETRACT_MIN, PROBE_RETRACT_MAX);
+      } else if (probeParamIdx == 3) {
+        // Plaka kalinligi ayarla (1 mm artis)
+        probePlate += delta;
+        probePlate = constrain(probePlate, PROBE_PLATE_MIN, PROBE_PLATE_MAX);
+        saveUserPrefs();
       }
       needRedraw = true;
     }
     if (encClicked) {
       encClicked = false;
       // Parametre seçimi değiştir (derinlik ↔ hız ↔ geri çekilme)
-      probeParamIdx = (probeParamIdx + 1) % 3;
+      probeParamIdx = (probeParamIdx + 1) % 4;
       needRedraw = true;
     }
     // AXIS butonu → probe başlat
@@ -974,20 +997,207 @@ void loop() {
                  probeDepth, probeFeed);
         fcSend(probeCmd);
         // 2) Dokunulan temas yüzeyini Z=0 olarak sıfırla
-        fcSend("G92 Z0");
+        char zeroCmd[24];
+        snprintf(zeroCmd, sizeof(zeroCmd), "G92 Z%d", probePlate);
+        fcSend(zeroCmd);
         // 3) Geri çekilme (Z ekseninde yukarı çık) ve G90 mutlak moda dön
         snprintf(probeCmd, sizeof(probeCmd), "G90 G0 Z%d", probeRetract);
         fcSend(probeCmd);
 
-        showPopup("PROBE BASLADI", C_GREEN, 1000);
+        showPopup("PROBE BASLADI", C_GREEN, POPUP_DUR_LONG);
         Serial.printf("[PROBE] Cycle: G91 G38.2 Z%d F%d -> G92 Z0 -> G90 G0 Z%d\n",
                       probeDepth, probeFeed, probeRetract);
       } else {
-        showPopup("SADECE IDLE!", C_RED, 800);
+        showPopup("SADECE IDLE!", C_RED, POPUP_DUR_NORMAL);
       }
       needRedraw = true;
     }
-    if (needRedraw) drawProbeScreen();
+    if (needRedraw && !popupState.active) drawProbeScreen();
+    break;
+  }
+
+
+  // -- SD KART LISTESI (#21) --
+  case SCR_SD_LIST: {
+    if (encLongPress || btns[0].fired) {
+      encLongPress = false;
+      btns[0].fired = false;
+      switchScreen(SCR_MENU);
+      break;
+    }
+    // SD liste yuklenmesi devam ediyorsa kontrol et
+    if (sdListPending) {
+      needRedraw = true;
+    }
+    if (delta != 0 && sdFileCount > 0 && !sdListPending) {
+      sdSelIdx += (delta > 0) ? 1 : -1;
+      if (sdSelIdx < 0) sdSelIdx = sdFileCount - 1;
+      if (sdSelIdx >= sdFileCount) sdSelIdx = 0;
+      needRedraw = true;
+    }
+    // AXIS butonu -> listeyi yenile
+    if (btns[2].fired) {
+      btns[2].fired = false;
+      fcSdList();
+      showPopup("YENILENIYOR", C_CYAN, POPUP_DUR_NORMAL);
+      needRedraw = true;
+    }
+    if (encClicked) {
+      encClicked = false;
+      if (sdFileCount > 0 && !sdListPending) {
+        // Dosya onizleme ekranina gec ve G-code iste
+        sdSelectedFile = sdFiles[sdSelIdx];
+        fcSdShow(sdSelectedFile.c_str());
+        switchScreen(SCR_SD_PREVIEW);
+      }
+      break;
+    }
+    if (needRedraw && !popupState.active) drawSdListScreen();
+    break;
+  }
+
+  // ── SD KART DOSYA ONIZLEME & BASLATMA ONAYI ──
+  // ── SD KART DOSYA ONIZLEME & CANLI IS TAKIP MERKEZI ──
+    // â”€â”€ SD KART DOSYA ONIZLEME EKRANI â”€â”€
+  case SCR_SD_PREVIEW: {
+    // 1. DÃ¶ner Encoder ile SatÄ±r SatÄ±r KaydÄ±rma (Scroll)
+    if (delta != 0 && sdPreviewLineCount > 0) {
+      sdPreviewScroll += delta;
+      int maxScroll = sdPreviewLineCount - 6;
+      if (maxScroll < 0) maxScroll = 0;
+      if (sdPreviewScroll < 0) sdPreviewScroll = 0;
+      if (sdPreviewScroll > maxScroll) sdPreviewScroll = maxScroll;
+      needRedraw = true;
+    }
+
+    // 2. AXIS butonu (btns[2]) -> Ä°ÅÄ° BAÅLAT ve CANLI TAKÄ°P EKRANINA GEÃ‡
+    if (btns[2].fired) {
+      btns[2].fired = false;
+      sdShowPending = false;
+      if (cur.state == ST_IDLE) {
+        for (int i = 0; i < 4; i++) btns[i].fired = false;
+        fcSdRun(sdSelectedFile.c_str());
+        showPopup("BASLATILDI", C_GREEN, POPUP_DUR_FAST);
+        switchScreen(SCR_JOB_PROGRESS);
+      } else if (cur.state == ST_HOLD) {
+        fcSendRealtime('~');
+        showPopup("DEVAM EDIYOR", C_GREEN, POPUP_DUR_FAST);
+        switchScreen(SCR_JOB_PROGRESS);
+      }
+      break;
+    }
+
+    // 3. HOME butonu (btns[0]) veya Encoder uzun basma -> LÄ°STEYE DÃ–N
+    if (encLongPress || btns[0].fired) {
+      encLongPress = false;
+      btns[0].fired = false;
+      sdShowPending = false;
+      switchScreen(SCR_SD_LIST);
+      break;
+    }
+
+    // BoÅŸta kalan butonlarÄ± ve tÄ±klamayÄ± tÃ¼ket
+    if (btns[1].fired) btns[1].fired = false;
+    if (btns[3].fired) btns[3].fired = false;
+    if (encClicked) encClicked = false;
+
+    if (needRedraw && !popupState.active) drawSdPreviewScreen();
+    break;
+  }
+
+      // â”€â”€ CANLI Ä°Å Ä°LERLEME VE TAKÄ°P EKRANI â”€â”€
+  case SCR_JOB_PROGRESS: {
+    static unsigned long jobStartMs = 0;
+    static bool initJobMs = false;
+    if (!initJobMs) { jobStartMs = millis(); initJobMs = true; }
+
+    // 1. ZERO butonu (btns[1]) -> GÃ¶revi iptal edildi (Sadece Alarm durumunda Reset atar)
+    if (btns[1].fired) {
+      btns[1].fired = false;
+      if (cur.state == ST_ALARM) {
+        fcSendRealtime(0x18); // Soft Reset
+        showPopup("RESET ATILDI", C_ORANGE, POPUP_DUR_NORMAL);
+        needRedraw = true;
+      }
+      break;
+    }
+
+    // 2. SPEED butonu (btns[3]) -> DURAKLAT / DEVAM ET (Pause / Resume)
+    if (btns[3].fired) {
+      btns[3].fired = false;
+      if (cur.state == ST_RUN) {
+        fcSendRealtime('!');  // Feed Hold -> Duraklat
+
+        // Duraklatilan noktayi ve G-code satirini Flash NVS'e kaydet
+        uint32_t stopLine = (cur.sdLine > 0) ? cur.sdLine : 1;
+        const char* gc = (stopLine <= (uint32_t)sdPreviewLineCount && stopLine > 0) ? sdPreviewLines[stopLine - 1].c_str() : "";
+        saveStoppedJob(sdSelectedFile.c_str(), cur.sdPercent, stopLine, cur.x - cur.wco_x, cur.y - cur.wco_y, cur.z - cur.wco_z, 0, gc);
+
+        showPopup("DURAKLATILDI (HOLD)", C_YELLOW, POPUP_DUR_NORMAL);
+        needRedraw = true;
+      } else if (cur.state == ST_HOLD) {
+        jobStartMs = millis();
+        fcSendRealtime('~');  // Cycle Start -> Devam Et
+        showPopup("DEVAM EDIYOR (RUN)", C_GREEN, POPUP_DUR_NORMAL);
+        needRedraw = true;
+      }
+      break;
+    }
+
+    // 3. AXIS butonu (btns[2]) -> DEVAM ET (Resume) / ALARM SIFIRLA ($X)
+    if (btns[2].fired) {
+      btns[2].fired = false;
+      if (cur.state == ST_HOLD) {
+        jobStartMs = millis();
+        fcSendRealtime('~');  // Cycle Start
+        showPopup("DEVAM EDIYOR (RUN)", C_GREEN, POPUP_DUR_NORMAL);
+        needRedraw = true;
+      } else if (cur.state == ST_ALARM) {
+        fcSend("$X");
+        showPopup("ALARM SIFIRLANDI", C_YELLOW, POPUP_DUR_NORMAL);
+        needRedraw = true;
+      }
+      break;
+    }
+
+    // 4. HOME butonu (btns[0]) veya Encoder uzun basma -> ANA SAYFAYA DON
+    if (encLongPress || btns[0].fired) {
+      encLongPress = false;
+      btns[0].fired = false;
+      switchScreen(SCR_MAIN);
+      break;
+    }
+
+    // 5. Otomatik Alarm Kaydi (Kesim sirasinda hata olusursa satir ve G-code kaydet)
+    static bool alarmSaved = false;
+    if (cur.state == ST_ALARM) {
+      if (!alarmSaved) {
+        alarmSaved = true;
+        // Yalnizca calisan veya duraklatilmis bir is varken kaydet
+        if (sdSelectedFile.length() > 0 || cur.sdPercent > 0.0f || cur.sdLine > 0) {
+          uint32_t stopLine = (cur.sdLine > 0) ? cur.sdLine : 1;
+          const char* gc = (stopLine <= (uint32_t)sdPreviewLineCount && stopLine > 0) ? sdPreviewLines[stopLine - 1].c_str() : "";
+          saveStoppedJob(sdSelectedFile.c_str(), cur.sdPercent, stopLine, cur.x - cur.wco_x, cur.y - cur.wco_y, cur.z - cur.wco_z, cur.alarmCode, gc);
+          needRedraw = true;
+        }
+      }
+    } else {
+      alarmSaved = false;
+    }
+
+    // 6. Ekran Cizimi & Canli Guncelleme (Flicker-Free)
+    if (needRedraw && !popupState.active) {
+      drawJobProgressScreen();
+      needRedraw = false;
+    } else if (!popupState.active) {
+      static unsigned long lastProgressTick = 0;
+      if (millis() - lastProgressTick > 80) {
+        lastProgressTick = millis();
+        updateJobProgressDisplay();
+      }
+    }
+
+    if (encClicked) encClicked = false;
     break;
   }
 

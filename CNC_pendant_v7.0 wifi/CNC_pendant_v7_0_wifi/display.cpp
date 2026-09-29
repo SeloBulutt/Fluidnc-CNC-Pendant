@@ -93,10 +93,11 @@ const char *stateStr(uint8_t s) {
 // ─── MENÜ ETİKETLERİ ─────────────────────────────────
 static const char *MENU_LABELS[] = {
   "Spindle Kontrolu", "Jog Hizi", "Step Boyutu",
-  "Sogutma", "Z Probe", "WiFi Ayarlari"
+  "Sogutma", "Sifira Git", "Z Probe",
+  "SD Kart", "WiFi Ayarlari"
 };
 static const char *MENU_RUN_LABELS[] = {
-  "Spindle Override", "Feed Override", "Jog Hizi",
+  "Is Durumu", "Spindle Override", "Feed Override", "Jog Hizi",
   "Step Boyutu", "Sogutma"
 };
 static const char *WIFI_MENU_LABELS[] = {
@@ -118,7 +119,15 @@ void drawHeader() {
   tft.setTextSize(1);
   tft.setTextColor(stateColor(cur.state));
   tft.setCursor(4, 5);
-  tft.print("["); tft.print(stateStr(cur.state)); tft.print("]");
+  tft.print("[");
+  if (cur.state == ST_ALARM && cur.alarmCode > 0) {
+    char alarmBuf[12];
+    snprintf(alarmBuf, sizeof(alarmBuf), "ALARM:%d", cur.alarmCode);
+    tft.print(alarmBuf);
+  } else {
+    tft.print(stateStr(cur.state));
+  }
+  tft.print("]");
   tft.setTextColor(C_CYAN);
   tft.setCursor(70, 5);
   tft.print("CNC PENDANT");
@@ -179,6 +188,26 @@ void drawAxisRows() {
   }
 }
 
+void updateFooterProgress() {
+  int y0 = 144;
+  int barW = (int)(126.0f * (cur.sdPercent / 100.0f));
+  if (barW < 0) barW = 0;
+  if (barW > 126) barW = 126;
+  uint16_t col = (cur.state == ST_HOLD) ? C_YELLOW : C_CYAN;
+  if (barW > 0) tft.fillRect(6, y0 + 17, barW, 5, col);
+  if (barW < 126) tft.fillRect(6 + barW, y0 + 17, 126 - barW, 5, C_PANEL);
+
+  tft.setCursor(138, y0 + 16);
+  tft.setTextSize(1);
+  tft.setTextColor(col, C_PANEL);
+  char pb[28];
+  snprintf(pb, sizeof(pb), "%%%5.1f L:%-5u %-4s", cur.sdPercent, cur.sdLine, (cur.state == ST_HOLD ? "HOLD" : "RUN"));
+  tft.print(pb);
+  tft.setCursor(256, y0 + 16);
+  tft.setTextColor(C_GRAY, C_PANEL);
+  tft.print("[ENC]Menu");
+}
+
 void drawFooter() {
   int y0 = 144;
   tft.fillRect(0, y0, TFT_W, TFT_H - y0, C_PANEL);
@@ -225,14 +254,23 @@ void drawFooter() {
   // Duruma göre bağlamsal yardım metni (#13 enum)
   if (cur.state == ST_ALARM) {
     tft.setTextColor(C_RED);
-    tft.print("[ZERO] Reset  [HOME] Kilit Ac");
-  } else if (cur.state == ST_HOLD) {
-    tft.setTextColor(C_YELLOW);
-    tft.print("[SPEED] Devam Et");
-  } else if (cur.state == ST_RUN || cur.state == ST_JOG) {
+    if (cur.alarmCode > 0) {
+      char almBuf[40];
+      snprintf(almBuf, sizeof(almBuf), "A%d: %s", cur.alarmCode, getAlarmMsg(cur.alarmCode));
+      tft.print(almBuf);
+    } else {
+      tft.print("[ZERO] Reset  [HOME] Kilit Ac");
+    }
+  } else if (cur.state == ST_HOLD || cur.state == ST_RUN) {
+    tft.drawRoundRect(4, y0 + 16, 130, 7, 2, C_GRAY);
+    updateFooterProgress();
+  } else if (cur.state == ST_JOG) {
     tft.setTextColor(C_CYAN);
+    tft.setCursor(4, y0 + 18);
     tft.print("[SPEED] Duraklat");
   } else {
+    tft.setTextColor(C_GRAY);
+    tft.setCursor(4, y0 + 18);
     tft.print("[HOME] [ZERO] [AXIS] [SPEED]  Tikla:Menu");
   }
 }
@@ -257,6 +295,7 @@ void drawMainAll() {
 
 // #8 Float epsilon + #10 Partial update (flicker azaltma)
 void updateMainDisplay() {
+  if (popupState.active) return;
   if (needRedraw) {
     drawMainAll();
     needRedraw = false;
@@ -283,6 +322,10 @@ void updateMainDisplay() {
     needRedraw = true;
   }
   if (fdChg) drawFooter();
+  bool sdChg = fabsf(cur.sdPercent - prev.sdPercent) > 0.05f || (cur.sdLine != prev.sdLine);
+  if (sdChg && (cur.state == ST_RUN || cur.state == ST_HOLD)) {
+    updateFooterProgress();
+  }
   prev = cur;
 }
 
@@ -295,28 +338,69 @@ void drawMenuScreen() {
   tft.fillRect(0, 0, TFT_W, 22, C_PANEL);
   tft.setTextSize(2);
   tft.setTextColor(C_CYAN);
-  tft.setCursor(90, 3);
+  tft.setCursor(80, 3);
   tft.print("CNC MENU");
   tft.drawFastHLine(0, 22, TFT_W, C_GRAY);
+
   bool runMode = (cur.state == ST_RUN || cur.state == ST_HOLD);
   int count = runMode ? MENU_RUN_COUNT : MENU_IDLE_COUNT;
-  // Spacing: 5 item = 24px, 6 item = 20px
-  int itemH = (count <= 5) ? 24 : 20;
-  for (int i = 0; i < count; i++) {
-    int y = 26 + i * itemH;
-    bool sel = (i == menuIdx);
-    if (sel) tft.fillRoundRect(8, y, 304, itemH - 2, 4, C_ROWHL);
-    tft.setTextSize(2);
-    tft.setTextColor(sel ? C_YELLOW : C_WHITE);
-    tft.setCursor(sel ? 24 : 16, y + 3);
-    if (sel) tft.print("> ");
-    tft.print(runMode ? MENU_RUN_LABELS[i] : MENU_LABELS[i]);
-  }
-  tft.drawFastHLine(0, 150, TFT_W, C_GRAY);
+
+  // Sayfa / Indeks gostergesi (Orn: 1/8)
+  char idxBuf[10];
+  snprintf(idxBuf, sizeof(idxBuf), "%d/%d", menuIdx + 1, count);
   tft.setTextSize(1);
   tft.setTextColor(C_GRAY);
-  tft.setCursor(50, 157);
-  tft.print("Encoder: Sec  |  Tikla: Gir");
+  tft.setCursor(275, 7);
+  tft.print(idxBuf);
+
+  // Ekranda ayni anda 5 oge gosterilir (kaydirma penceresi)
+  const int VISIBLE_ITEMS = 5;
+  static int menuTopIdx = 0;
+  if (count <= VISIBLE_ITEMS) {
+    menuTopIdx = 0;
+  } else {
+    if (menuIdx < menuTopIdx) {
+      menuTopIdx = menuIdx;
+    } else if (menuIdx >= menuTopIdx + VISIBLE_ITEMS) {
+      menuTopIdx = menuIdx - VISIBLE_ITEMS + 1;
+    }
+  }
+
+  int itemH = 24;
+  int numToShow = (count < VISIBLE_ITEMS) ? count : VISIBLE_ITEMS;
+  for (int vi = 0; vi < numToShow; vi++) {
+    int idx = menuTopIdx + vi;
+    if (idx >= count) break;
+    int y = 26 + vi * itemH;
+    bool sel = (idx == menuIdx);
+    if (sel) tft.fillRoundRect(6, y, 300, itemH - 2, 4, C_ROWHL);
+    tft.setTextSize(2);
+    tft.setTextColor(sel ? C_YELLOW : C_WHITE);
+    tft.setCursor(sel ? 22 : 14, y + 4);
+    if (sel) tft.print("> ");
+    tft.print(runMode ? MENU_RUN_LABELS[idx] : MENU_LABELS[idx]);
+  }
+
+  // Dikey kaydirma cubugu (scrollbar)
+  if (count > VISIBLE_ITEMS) {
+    int barX = 312;
+    int barY = 26;
+    int barH = 118;
+    int barW = 4;
+    tft.fillRoundRect(barX, barY, barW, barH, 2, C_PANEL);
+    int thumbH = barH * VISIBLE_ITEMS / count;
+    int maxTop = count - VISIBLE_ITEMS;
+    int thumbY = barY + (barH - thumbH) * menuTopIdx / maxTop;
+    tft.fillRoundRect(barX, thumbY, barW, thumbH, 2, C_CYAN);
+  }
+
+  // Alt bilgi cubugu
+  tft.drawFastHLine(0, 150, TFT_W, C_GRAY);
+  tft.fillRect(0, 151, TFT_W, 19, C_PANEL);
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(30, 156);
+  tft.print("Encoder: Sec  |  Tikla: Gir  |  Uzun: Geri");
   needRedraw = false;
 }
 
@@ -847,7 +931,7 @@ void drawProbeScreen() {
 
   // Mevcut Z pozisyonu (WCS)
   tft.setTextSize(1); tft.setTextColor(C_GRAY);
-  tft.setCursor(20, 26);
+  tft.setCursor(20, 24);
   tft.print("Mevcut Z: ");
   tft.setTextColor(C_WHITE);
   char zBuf[12];
@@ -855,12 +939,12 @@ void drawProbeScreen() {
   tft.print(zBuf);
 
   // 1. Parametre: Derinlik (probeParamIdx == 0)
-  int y1 = 38;
+  int y1 = 34;
   bool selDepth = (probeParamIdx == 0);
-  if (selDepth) tft.fillRoundRect(15, y1, 290, 24, 4, C_ROWHL);
+  if (selDepth) tft.fillRoundRect(15, y1, 290, 22, 4, C_ROWHL);
   tft.setTextSize(2);
   tft.setTextColor(selDepth ? C_YELLOW : C_WHITE);
-  tft.setCursor(25, y1 + 4);
+  tft.setCursor(25, y1 + 3);
   if (selDepth) tft.print("> ");
   tft.print("Derinlik: ");
   char dBuf[10];
@@ -868,13 +952,13 @@ void drawProbeScreen() {
   tft.setTextColor(selDepth ? C_YELLOW : C_GREEN);
   tft.print(dBuf);
 
-  // 2. Parametre: Hız (probeParamIdx == 1)
-  int y2 = 64;
+  // 2. Parametre: Hiz (probeParamIdx == 1)
+  int y2 = 58;
   bool selFeedP = (probeParamIdx == 1);
-  if (selFeedP) tft.fillRoundRect(15, y2, 290, 24, 4, C_ROWHL);
+  if (selFeedP) tft.fillRoundRect(15, y2, 290, 22, 4, C_ROWHL);
   tft.setTextSize(2);
   tft.setTextColor(selFeedP ? C_YELLOW : C_WHITE);
-  tft.setCursor(25, y2 + 4);
+  tft.setCursor(25, y2 + 3);
   if (selFeedP) tft.print("> ");
   tft.print("Hiz: ");
   char fBuf[14];
@@ -882,13 +966,13 @@ void drawProbeScreen() {
   tft.setTextColor(selFeedP ? C_YELLOW : C_GREEN);
   tft.print(fBuf);
 
-  // 3. Parametre: Geri Çekilme (probeParamIdx == 2)
-  int y3 = 90;
+  // 3. Parametre: Geri Cekilme (probeParamIdx == 2)
+  int y3 = 82;
   bool selRetract = (probeParamIdx == 2);
-  if (selRetract) tft.fillRoundRect(15, y3, 290, 24, 4, C_ROWHL);
+  if (selRetract) tft.fillRoundRect(15, y3, 290, 22, 4, C_ROWHL);
   tft.setTextSize(2);
   tft.setTextColor(selRetract ? C_YELLOW : C_WHITE);
-  tft.setCursor(25, y3 + 4);
+  tft.setCursor(25, y3 + 3);
   if (selRetract) tft.print("> ");
   tft.print("Geri Cek: ");
   char rBuf[10];
@@ -896,24 +980,501 @@ void drawProbeScreen() {
   tft.setTextColor(selRetract ? C_YELLOW : C_GREEN);
   tft.print(rBuf);
 
-  // İşlem Özeti
+  // 4. Parametre: Plaka Kalinligi (probeParamIdx == 3)
+  int y4 = 106;
+  bool selPlate = (probeParamIdx == 3);
+  if (selPlate) tft.fillRoundRect(15, y4, 290, 22, 4, C_ROWHL);
+  tft.setTextSize(2);
+  tft.setTextColor(selPlate ? C_YELLOW : C_WHITE);
+  tft.setCursor(25, y4 + 3);
+  if (selPlate) tft.print("> ");
+  tft.print("Plaka: ");
+  char pBuf[10];
+  snprintf(pBuf, sizeof(pBuf), "%d mm", probePlate);
+  tft.setTextColor(selPlate ? C_YELLOW : C_GREEN);
+  tft.print(pBuf);
+
+  // Islem Ozeti
   tft.setTextSize(1); tft.setTextColor(C_ORANGE);
-  tft.setCursor(20, 118);
+  tft.setCursor(20, 134);
   tft.print("Islem: ");
   tft.setTextColor(C_WHITE);
   char infoBuf[48];
-  snprintf(infoBuf, sizeof(infoBuf), "Dokun -> Sifirla (Z0) -> Cekil (+%dmm)", probeRetract);
+  snprintf(infoBuf, sizeof(infoBuf), "Dokun -> Z=%dmm -> Cekil (+%dmm)", probePlate, probeRetract);
   tft.print(infoBuf);
-
   // Yardım satırı
   tft.setTextSize(1); tft.setTextColor(C_GRAY);
-  tft.setCursor(10, 134);
-  tft.print("Cevir: Deger  |  Tikla: Parametre Sec");
-
   // Alt bar
-  tft.fillRect(0, 148, TFT_W, 22, C_PANEL);
-  tft.setCursor(10, 153);
+  tft.fillRect(0, 152, TFT_W, 18, C_PANEL);
+  tft.setCursor(10, 157);
+  tft.setTextColor(C_GRAY);
+  tft.print("Cevir:Deger Tikla:Param ");
   tft.setTextColor(C_GREEN);
-  tft.print("[AXIS] = PROBE BASLAT  |  Uzun: Geri");
+  tft.print("[AXIS]=BASLAT");
   needRedraw = false;
+}
+
+
+// ====================================================
+// --- SD KART DOSYA LISTESI (#21) ---
+// ====================================================
+
+void drawSdListScreen() {
+  tft.fillScreen(C_BG);
+  tft.fillRect(0, 0, TFT_W, 22, C_PANEL);
+  tft.setTextSize(2);
+  tft.setTextColor(C_CYAN);
+  tft.setCursor(80, 3);
+  tft.print("SD KART");
+  tft.drawFastHLine(0, 22, TFT_W, C_GRAY);
+
+  // Dosya sayisi
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(230, 8);
+  char cntBuf[12];
+  snprintf(cntBuf, sizeof(cntBuf), "%d dosya", sdFileCount);
+  tft.print(cntBuf);
+
+  if (sdListPending) {
+    tft.setTextSize(2); tft.setTextColor(C_YELLOW);
+    tft.setCursor(60, 70);
+    tft.print("Yukleniyor...");
+  } else if (sdFileCount == 0) {
+    tft.setTextSize(2); tft.setTextColor(C_RED);
+    tft.setCursor(40, 70);
+    tft.print("Dosya bulunamadi!");
+  } else {
+    for (int i = 0; i < sdFileCount; i++) {
+      int y = 26 + i * 15;
+      if (y > 140) break;
+      bool sel = (i == sdSelIdx);
+      if (sel) tft.fillRect(0, y, TFT_W, 15, C_ROWHL);
+      tft.setTextSize(1);
+      tft.setTextColor(sel ? C_YELLOW : C_WHITE);
+      tft.setCursor(4, y + 3);
+      if (sel) tft.print("> ");
+      // Dosya adini max 35 karakter goster
+      String fname = sdFiles[i].substring(0, 35);
+      tft.print(fname);
+    }
+  }
+
+  tft.fillRect(0, 152, TFT_W, 18, C_PANEL);
+  tft.setTextSize(1); tft.setTextColor(C_GRAY);
+  tft.setCursor(20, 157);
+  tft.print("Cevir: Sec  |  Tikla: Onizle  |  Uzun: Geri");
+  needRedraw = false;
+}
+
+
+// ====================================================
+// ====================================================
+// --- SD KART DOSYA ONIZLEME EKRANI ---
+// ====================================================
+
+void drawSdPreviewScreen() {
+  tft.fillScreen(C_BG);
+
+  // Ust panel (0..22)
+  tft.fillRect(0, 0, TFT_W, 22, C_PANEL);
+  tft.setTextSize(2);
+  tft.setTextColor(C_CYAN);
+  tft.setCursor(10, 3);
+  tft.print("DOSYA ONIZLEME");
+  tft.drawFastHLine(0, 22, TFT_W, C_GRAY);
+
+  // Durum gostergesi (ust sag)
+  tft.setTextSize(1);
+  if (sdShowPending) {
+    tft.setTextColor(C_YELLOW);
+    tft.setCursor(225, 7);
+    tft.print("Okunuyor...");
+  } else {
+    tft.setTextColor(C_GREEN);
+    tft.setCursor(240, 7);
+    char statBuf[16];
+    snprintf(statBuf, sizeof(statBuf), "%d satir", sdPreviewLineCount);
+    tft.print(statBuf);
+  }
+
+  // Dosya adi & Kaydirma satiri (y=26)
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(6, 26);
+  tft.print("Dosya: ");
+  tft.setTextColor(C_YELLOW);
+  String displayFileName = sdSelectedFile;
+  if (displayFileName.length() > 26) {
+    displayFileName = displayFileName.substring(0, 26);
+  }
+  tft.print(displayFileName);
+
+  // Satir araligi bilgisi (sag taraf)
+  if (sdPreviewLineCount > 0) {
+    tft.setTextColor(C_GRAY);
+    tft.setCursor(235, 26);
+    int endLine = sdPreviewScroll + 6;
+    if (endLine > sdPreviewLineCount) endLine = sdPreviewLineCount;
+    char rangeBuf[16];
+    snprintf(rangeBuf, sizeof(rangeBuf), "%d-%d/%d", sdPreviewScroll + 1, endLine, sdPreviewLineCount);
+    tft.print(rangeBuf);
+  }
+
+  // G-Code terminal kutusu (y=38..148, w=298, h=110)
+  tft.fillRoundRect(4, 38, 298, 110, 4, 0x0842);
+  tft.drawRoundRect(4, 38, 298, 110, 4, 0x31A6);
+
+  // Dikey Scrollbar (x=306, y=38, w=10, h=110)
+  tft.fillRoundRect(306, 38, 10, 110, 3, 0x18C3);
+  if (sdPreviewLineCount > 6) {
+    int thumbH = 110 * 6 / sdPreviewLineCount;
+    if (thumbH < 15) thumbH = 15;
+    int maxScroll = sdPreviewLineCount - 6;
+    int thumbY = 38 + ((110 - thumbH) * sdPreviewScroll) / maxScroll;
+    tft.fillRoundRect(307, thumbY, 8, thumbH, 3, C_CYAN);
+  } else {
+    tft.fillRoundRect(307, 39, 8, 108, 3, 0x31A6);
+  }
+
+  if (sdShowPending && sdPreviewLineCount == 0) {
+    tft.setTextSize(2);
+    tft.setTextColor(C_YELLOW);
+    tft.setCursor(55, 82);
+    tft.print("G-code Okunuyor...");
+  } else if (!sdShowPending && sdPreviewLineCount == 0) {
+    tft.setTextSize(2);
+    tft.setTextColor(C_RED);
+    tft.setCursor(35, 82);
+    tft.print("G-code Okunamadi!");
+  } else {
+    // G-code satirlarini listele (sdPreviewScroll'dan itibaren 6 satir)
+    tft.setTextSize(1);
+    for (int i = 0; i < 6 && (sdPreviewScroll + i) < sdPreviewLineCount; i++) {
+      int lineIdx = sdPreviewScroll + i;
+      int lineY = 43 + i * 17;
+
+      // Satir no
+      tft.setTextColor(C_GRAY);
+      tft.setCursor(8, lineY);
+      char numBuf[8];
+      snprintf(numBuf, sizeof(numBuf), "%d:", lineIdx + 1);
+      tft.print(numBuf);
+
+      // G-code metni
+      tft.setTextColor(0x07E0);
+      int textX = (lineIdx + 1 >= 100) ? 36 : ((lineIdx + 1 >= 10) ? 30 : 24);
+      tft.setCursor(textX, lineY);
+      tft.print(sdPreviewLines[lineIdx]);
+    }
+  }
+
+  // Alt kontrol cubugu (y=152..170)
+  tft.fillRect(0, 152, TFT_W, 18, C_PANEL);
+  tft.drawFastHLine(0, 151, TFT_W, C_GRAY);
+  tft.setTextSize(1);
+  tft.setTextColor(C_GREEN);
+  tft.setCursor(10, 156);
+  tft.print("[AXIS] BASLAT");
+  tft.setTextColor(C_GRAY);
+  tft.print("  |  ");
+  tft.setTextColor(C_CYAN);
+  tft.print("[Encoder] KAYDIR");
+  tft.setTextColor(C_GRAY);
+  tft.print("  |  ");
+  tft.setTextColor(C_ORANGE);
+  tft.print("[HOME] GERI");
+
+  needRedraw = false;
+}
+
+// ====================================================
+// --- CANLI IS ILERLEME VE TAKIP EKRANI ---
+// ====================================================
+// --- CANLI IS ILERLEME VE TAKIP EKRANI ---
+// ====================================================
+
+static uint32_t lastDrawnJobLine = 0xFFFFFFFF;
+
+void drawJobProgressGCodeLines(uint32_t activeLine) {
+  // 4 satir G-code goster (y=72..142)
+  uint32_t startLine = 1;
+  if (activeLine > 2) {
+    startLine = activeLine - 1;
+  }
+
+  for (int i = 0; i < 4; i++) {
+    uint32_t lineNo = startLine + i;
+    int lineY = 73 + i * 18;
+    bool isActive = (lineNo == activeLine);
+
+    // Satir arka plani
+    if (isActive) {
+      tft.fillRoundRect(6, lineY - 2, 308, 17, 3, C_ROWHL);
+    } else {
+      tft.fillRect(6, lineY - 2, 308, 17, 0x0842);
+    }
+
+    tft.setTextSize(1);
+    char lineBuf[64];
+    if (lineNo <= (uint32_t)sdPreviewLineCount && lineNo > 0) {
+      snprintf(lineBuf, sizeof(lineBuf), "%s%3u: %s",
+               isActive ? "> " : "  ",
+               lineNo,
+               sdPreviewLines[lineNo - 1].c_str());
+    } else {
+      if (isActive) {
+        snprintf(lineBuf, sizeof(lineBuf), "> %3u: [G-Code Isleniyor...] (F:%.0f)", lineNo, cur.feed);
+      } else {
+        snprintf(lineBuf, sizeof(lineBuf), "  %3u: [G-Code]", lineNo);
+      }
+    }
+
+    uint16_t rowBg = isActive ? C_ROWHL : 0x0842;
+    uint16_t rowFg = isActive ? ((cur.state == ST_HOLD) ? C_YELLOW : C_GREEN) : C_GRAY;
+    tft.setTextColor(rowFg, rowBg);
+    tft.setCursor(8, lineY + 2);
+    tft.print(lineBuf);
+  }
+}
+
+void drawJobProgressScreen() {
+  tft.fillScreen(C_BG);
+  lastDrawnJobLine = 0xFFFFFFFF;
+
+  bool isStopped = lastStoppedJob.valid && (cur.state == ST_IDLE);
+
+  // 1. Ust panel (0..22) - Duruma gore renkli
+  uint16_t hdrCol = (cur.state == ST_HOLD) ? 0x6300 : ((cur.state == ST_ALARM || isStopped) ? 0x7800 : 0x0320);
+  tft.fillRect(0, 0, TFT_W, 22, hdrCol);
+  tft.drawFastHLine(0, 22, TFT_W, C_GRAY);
+
+  tft.setTextSize(2);
+  if (cur.state == ST_RUN) {
+    tft.setTextColor(C_GREEN, hdrCol);
+    tft.setCursor(10, 3);
+    tft.print("IS CALISIYOR");
+  } else if (cur.state == ST_HOLD) {
+    tft.setTextColor(C_YELLOW, hdrCol);
+    tft.setCursor(10, 3);
+    tft.print("DURAKLATILDI");
+  } else if (cur.state == ST_ALARM) {
+    tft.setTextColor(C_RED, hdrCol);
+    tft.setCursor(10, 3);
+    tft.print("ALARM DURUMU!");
+  } else if (isStopped) {
+    tft.setTextColor(C_RED, hdrCol);
+    tft.setCursor(10, 3);
+    tft.print("IS DURDURULDU");
+  } else {
+    tft.setTextColor(C_CYAN, hdrCol);
+    tft.setCursor(10, 3);
+    tft.print("IS TAKIBI");
+  }
+
+  // 2. Ilerleme cubugu cercevesi (y=25..36, w=308, h=12)
+  tft.drawRoundRect(6, 25, 308, 12, 3, C_GRAY);
+
+  // 3. Bilgi Seridi: Dosya Adi & Hizlar (y=39..54, h=15)
+  tft.fillRect(4, 39, 312, 15, C_PANEL);
+  tft.drawRect(4, 39, 312, 15, C_GRAY);
+  tft.setTextSize(1);
+
+  // Dosya adi & Feed & Spindle
+  tft.setCursor(8, 43);
+  tft.setTextColor(C_GRAY, C_PANEL);
+  tft.print("Dosya: ");
+  String fn = sdSelectedFile.length() > 0 ? sdSelectedFile : (lastStoppedJob.valid ? lastStoppedJob.fileName : "SD Kart");
+  if (fn.length() > 18) fn = fn.substring(0, 18);
+  tft.setTextColor(C_YELLOW, C_PANEL);
+  tft.print(fn);
+
+  tft.setCursor(160, 43);
+  tft.setTextColor(C_GRAY, C_PANEL);
+  tft.print("F:");
+  char fb[16];
+  snprintf(fb, sizeof(fb), "%-4.0f", cur.feed);
+  tft.setTextColor(C_ORANGE, C_PANEL);
+  tft.print(fb);
+  if (cur.feedOv != 100) {
+    char ov[8]; snprintf(ov, sizeof(ov), "[%d%%]", cur.feedOv);
+    tft.setTextColor(C_YELLOW, C_PANEL);
+    tft.print(ov);
+  }
+
+  tft.setCursor(240, 43);
+  tft.setTextColor(C_GRAY, C_PANEL);
+  tft.print("S:");
+  char sb[16];
+  snprintf(sb, sizeof(sb), "%-5.0f", cur.spindle);
+  tft.setTextColor(C_GREEN, C_PANEL);
+  tft.print(sb);
+
+  // 4. Ana Kart (y=56..145, h=90): OKUNAN G-CODE SATIRLARI veya DURDURULAN NOKTA KARTI
+  uint16_t boxBorder = (cur.state == ST_HOLD) ? C_YELLOW : ((cur.state == ST_ALARM || isStopped) ? C_RED : 0x31A6);
+  tft.fillRect(4, 56, 312, 90, 0x0842);
+  tft.drawRect(4, 56, 312, 90, boxBorder);
+
+  if (cur.state == ST_ALARM || isStopped) {
+    // --- DURDURULAN / ALARM KAYIT BILGISI KUTUSU ---
+    tft.setTextSize(1);
+    tft.setTextColor(boxBorder, 0x0842);
+    tft.setCursor(8, 60);
+    if (cur.state == ST_ALARM) {
+      char aHdr[64];
+      snprintf(aHdr, sizeof(aHdr), "[!] ALARM %d: %s (KAYDEDILDI)", cur.alarmCode, getAlarmMsg(cur.alarmCode));
+      tft.print(aHdr);
+    } else {
+      tft.print("[!] IS TAMAMEN DURDURULDU (FLASH'A KAYDEDILDI):");
+    }
+
+    tft.setCursor(8, 75);
+    tft.setTextColor(C_YELLOW, 0x0842);
+    char sBuf[64];
+    snprintf(sBuf, sizeof(sBuf), "Kaldigi Satir : #%u  (%%%0.1f)",
+             lastStoppedJob.valid ? lastStoppedJob.line : cur.sdLine,
+             lastStoppedJob.valid ? lastStoppedJob.percent : cur.sdPercent);
+    tft.print(sBuf);
+
+    tft.setCursor(8, 90);
+    tft.setTextColor(C_WHITE, 0x0842);
+    char gBuf[64];
+    const char* gcText = lastStoppedJob.gcode[0] ? lastStoppedJob.gcode : (lastStoppedJob.line <= (uint32_t)sdPreviewLineCount && lastStoppedJob.line > 0 ? sdPreviewLines[lastStoppedJob.line - 1].c_str() : "[G-Code]");
+    snprintf(gBuf, sizeof(gBuf), "Durdurulan Kod: %s", gcText);
+    tft.print(gBuf);
+
+    tft.setCursor(8, 105);
+    tft.setTextColor(C_GREEN, 0x0842);
+    char cBuf[64];
+    snprintf(cBuf, sizeof(cBuf), "Konum (WPos)  : X:%.3f  Y:%.3f  Z:%.3f",
+             lastStoppedJob.valid ? lastStoppedJob.x : (cur.x - cur.wco_x),
+             lastStoppedJob.valid ? lastStoppedJob.y : (cur.y - cur.wco_y),
+             lastStoppedJob.valid ? lastStoppedJob.z : (cur.z - cur.wco_z));
+    tft.print(cBuf);
+
+    tft.setTextColor(C_CYAN, 0x0842);
+    tft.setCursor(8, 121);
+    tft.print("-> Bu satir NVS hafizada saklandi.");
+
+    tft.setTextColor(C_GRAY, 0x0842);
+    tft.setCursor(8, 134);
+    tft.print("Buradan baslatmak icin dosyayi bu satirdan acin.");
+  } else {
+    // --- OKUNAN G-CODE SATIRLARI ---
+    tft.setTextSize(1);
+    tft.setTextColor(C_CYAN, 0x0842);
+    tft.setCursor(8, 60);
+    tft.print("OKUNAN G-CODE SATIRLARI:");
+
+    tft.setCursor(215, 60);
+    tft.setTextColor(C_YELLOW, 0x0842);
+    char curLineStr[20];
+    snprintf(curLineStr, sizeof(curLineStr), "Aktif: #%-5u", cur.sdLine);
+    tft.print(curLineStr);
+
+    tft.drawFastHLine(6, 70, 308, 0x18C3);
+
+    uint32_t activeLine = (cur.sdLine > 0) ? cur.sdLine : 1;
+    drawJobProgressGCodeLines(activeLine);
+    lastDrawnJobLine = activeLine;
+  }
+
+  // 5. Alt kontrol cubugu (y=148..170, h=22)
+  tft.fillRect(0, 148, TFT_W, 22, C_PANEL);
+  tft.drawFastHLine(0, 147, TFT_W, C_GRAY);
+  tft.setTextSize(1);
+
+  if (cur.state == ST_RUN) {
+    tft.setCursor(15, 154);
+    tft.setTextColor(C_YELLOW, C_PANEL);
+    tft.print("[SPEED] Duraklat");
+
+    tft.setCursor(215, 154);
+    tft.setTextColor(C_CYAN, C_PANEL);
+    tft.print("[HOME] Ana Menu");
+  } else if (cur.state == ST_HOLD) {
+    tft.setCursor(15, 154);
+    tft.setTextColor(C_GREEN, C_PANEL);
+    tft.print("[SPEED] Devam Et (~)");
+
+    tft.setCursor(215, 154);
+    tft.setTextColor(C_CYAN, C_PANEL);
+    tft.print("[HOME] Ana Menu");
+  } else {
+    tft.setCursor(15, 154);
+    tft.setTextColor(C_RED, C_PANEL);
+    tft.print("[ZERO] Reset");
+
+    tft.setCursor(215, 154);
+    tft.setTextColor(C_CYAN, C_PANEL);
+    tft.print("[HOME] Ana Menu");
+  }
+
+  // Ilk degerleri ciz
+  updateJobProgressDisplay();
+  needRedraw = false;
+}
+
+// ====================================================
+// --- CANLI IS ILERLEME KISMI GUNCELLEME (FLICKER-FREE) ---
+// ====================================================
+
+void updateJobProgressDisplay() {
+  static uint8_t lastJobState = 255;
+  if (cur.state != lastJobState) {
+    lastJobState = cur.state;
+    needRedraw = true;
+    return;
+  }
+
+  bool isStopped = lastStoppedJob.valid && (cur.state == ST_IDLE);
+  uint16_t hdrCol = (cur.state == ST_HOLD) ? 0x6300 : ((cur.state == ST_ALARM || isStopped) ? 0x7800 : 0x0320);
+
+  // 1. Sag ust yuzde & satir bilgisi
+  tft.setTextSize(1);
+  tft.setTextColor(C_WHITE, hdrCol);
+  tft.setCursor(205, 7);
+  char pBuf[24];
+  snprintf(pBuf, sizeof(pBuf), "%%%5.1f | L:%-5u", cur.sdPercent, cur.sdLine);
+  tft.print(pBuf);
+
+  // 2. Ilerleme cubugu dolgusu (Flicker-Free)
+  int barW = (int)(304.0f * (cur.sdPercent / 100.0f));
+  if (barW < 0) barW = 0;
+  if (barW > 304) barW = 304;
+  uint16_t barCol = (cur.state == ST_HOLD) ? C_YELLOW : ((cur.state == ST_ALARM || isStopped) ? C_RED : C_CYAN);
+  if (barW > 0) tft.fillRect(8, 27, barW, 8, barCol);
+  if (barW < 304) tft.fillRect(8 + barW, 27, 304 - barW, 8, C_BG);
+
+  // 3. Hiz ve Spindle Degerleri
+  tft.setTextSize(1);
+  tft.setCursor(172, 43);
+  char fb[16];
+  snprintf(fb, sizeof(fb), "%-4.0f", cur.feed);
+  tft.setTextColor(C_ORANGE, C_PANEL);
+  tft.print(fb);
+
+  tft.setCursor(252, 43);
+  char sb[16];
+  snprintf(sb, sizeof(sb), "%-5.0f", cur.spindle);
+  tft.setTextColor(C_GREEN, C_PANEL);
+  tft.print(sb);
+
+  // 4. Okunan G-Code Satirlari (Sadece RUN veya HOLD iken satir degistiginde guncelle)
+  if (cur.state == ST_RUN || cur.state == ST_HOLD) {
+    uint32_t activeLine = (cur.sdLine > 0) ? cur.sdLine : 1;
+    if (activeLine != lastDrawnJobLine) {
+      lastDrawnJobLine = activeLine;
+
+      // Ust basliktaki aktif satir no guncelle
+      tft.setCursor(257, 60);
+      tft.setTextColor(C_YELLOW, 0x0842);
+      char curLineStr[10];
+      snprintf(curLineStr, sizeof(curLineStr), "%-5u", activeLine);
+      tft.print(curLineStr);
+
+      // G-code satirlarini ciz
+      drawJobProgressGCodeLines(activeLine);
+    }
+  }
 }

@@ -79,6 +79,7 @@ void saveUserPrefs() {
   prefs.putUChar("selStep", selStep);
   prefs.putUChar("selFeed", selFeed);
   prefs.putUChar("bright", brightnessIdx);
+  prefs.putInt("probePlate", probePlate);
   prefs.end();
   Serial.println("[PREFS] User prefs saved");
 }
@@ -89,9 +90,72 @@ void loadUserPrefs() {
   selStep = prefs.getUChar("selStep", 0);
   selFeed = prefs.getUChar("selFeed", 1);
   brightnessIdx = prefs.getUChar("bright", BRIGHTNESS_LEVELS - 1);
+  probePlate = prefs.getInt("probePlate", PROBE_PLATE_DEFAULT);
   prefs.end();
   Serial.printf("[PREFS] Loaded: axis=%d step=%d feed=%d bright=%d\n",
                 selAxis, selStep, selFeed, brightnessIdx);
+}
+
+// --- DURDURULAN IS KALICILIGI (NVS) ---
+StoppedJobInfo lastStoppedJob = {false, "", 0.0f, 0, 0.0f, 0.0f, 0.0f, 0, ""};
+
+void saveStoppedJob(const char* file, float percent, uint32_t line, float x, float y, float z, uint8_t alarm, const char* gcode) {
+  lastStoppedJob.valid = true;
+  strncpy(lastStoppedJob.fileName, (file && file[0]) ? file : "", sizeof(lastStoppedJob.fileName) - 1);
+  lastStoppedJob.fileName[sizeof(lastStoppedJob.fileName) - 1] = '\0';
+  lastStoppedJob.percent = percent;
+  lastStoppedJob.line = line;
+  lastStoppedJob.x = x;
+  lastStoppedJob.y = y;
+  lastStoppedJob.z = z;
+  lastStoppedJob.alarmCode = alarm;
+  if (gcode && gcode[0]) {
+    strncpy(lastStoppedJob.gcode, gcode, sizeof(lastStoppedJob.gcode) - 1);
+    lastStoppedJob.gcode[sizeof(lastStoppedJob.gcode) - 1] = '\0';
+  } else {
+    lastStoppedJob.gcode[0] = '\0';
+  }
+
+  if (prefs.begin("lastjob", false)) {
+    prefs.putString("file", lastStoppedJob.fileName);
+    prefs.putFloat("pct", percent);
+    prefs.putUInt("line", line);
+    prefs.putFloat("x", x);
+    prefs.putFloat("y", y);
+    prefs.putFloat("z", z);
+    prefs.putUChar("alarm", alarm);
+    prefs.putString("gc", lastStoppedJob.gcode);
+    prefs.putBool("valid", true);
+    prefs.end();
+  }
+
+  Serial.printf("[NVS-JOB] Saved: %s at %.1f%% line %u (X:%.2f Y:%.2f Z:%.2f) Code:%s Alarm:%d\n",
+                lastStoppedJob.fileName, percent, line, x, y, z, lastStoppedJob.gcode, alarm);
+}
+
+void loadStoppedJob() {
+  if (prefs.begin("lastjob", true)) {
+    lastStoppedJob.valid = prefs.getBool("valid", false);
+    if (lastStoppedJob.valid) {
+      String fname = prefs.getString("file", "");
+      strncpy(lastStoppedJob.fileName, fname.c_str(), sizeof(lastStoppedJob.fileName) - 1);
+      lastStoppedJob.fileName[sizeof(lastStoppedJob.fileName) - 1] = '\0';
+      lastStoppedJob.percent = prefs.getFloat("pct", 0.0f);
+      lastStoppedJob.line = prefs.getUInt("line", 0);
+      lastStoppedJob.x = prefs.getFloat("x", 0.0f);
+      lastStoppedJob.y = prefs.getFloat("y", 0.0f);
+      lastStoppedJob.z = prefs.getFloat("z", 0.0f);
+      lastStoppedJob.alarmCode = prefs.getUChar("alarm", 0);
+      String gc = prefs.getString("gc", "");
+      strncpy(lastStoppedJob.gcode, gc.c_str(), sizeof(lastStoppedJob.gcode) - 1);
+      lastStoppedJob.gcode[sizeof(lastStoppedJob.gcode) - 1] = '\0';
+    }
+    prefs.end();
+  }
+  if (lastStoppedJob.valid) {
+    Serial.printf("[NVS-JOB] Loaded last stopped job: %s line %u (%.1f%%) Code:%s\n",
+                  lastStoppedJob.fileName, lastStoppedJob.line, lastStoppedJob.percent, lastStoppedJob.gcode);
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -202,11 +266,16 @@ bool mdnsDiscoverFluidNC() {
     String hostname = MDNS.hostname(i);
     String hostLower = hostname;
     hostLower.toLowerCase();
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    IPAddress currentMdnsIp = MDNS.address(i);
+#else
+    IPAddress currentMdnsIp = MDNS.IP(i);
+#endif
     Serial.printf("[mDNS]   [%d] host=%s ip=%s port=%d\n", i, hostname.c_str(),
-                  MDNS.IP(i).toString().c_str(), MDNS.port(i));
+                  currentMdnsIp.toString().c_str(), MDNS.port(i));
     // FluidNC hostname'i genellikle "fluidnc" içerir
     if (hostLower.indexOf("fluidnc") >= 0 || hostLower.indexOf("fluid") >= 0) {
-      IPAddress ip = MDNS.IP(i);
+      IPAddress ip = currentMdnsIp;
       if (ip[0] != 0) {
         // Mevcut IP ile aynı mı kontrol et
         if (wifiIP[0] == ip[0] && wifiIP[1] == ip[1] &&
@@ -264,20 +333,26 @@ void tcpStartConnection() {
 
 // #7 TCP parse char buffer ile (heap fragmentation düzeltme)
 void tcpReadIncoming() {
+  static bool tcpInPkt = false;
   while (tcpClient.available()) {
     char c = (char)tcpClient.read();
     if (c == '<') {
       tcpBufIdx = 0;
+      tcpInPkt = true;
     } else if (c == '>') {
-      if (tcpBufIdx > 0) {
+      if (tcpInPkt && tcpBufIdx > 0) {
         tcpBuf[tcpBufIdx] = '\0';
-        Serial.printf("[TCP] RX: <%s>\n", tcpBuf);
         parseStatus(tcpBuf);
         lastDataReceived = millis();  // TCP veri geldi, uyku sıfırla
       }
+      tcpInPkt = false;
       tcpBufIdx = 0;
-    } else if (c != '\n' && c != '\r' && tcpBufIdx < sizeof(tcpBuf) - 1) {
-      tcpBuf[tcpBufIdx++] = c;
+    } else if (tcpInPkt) {
+      if (tcpBufIdx < sizeof(tcpBuf) - 1) {
+        tcpBuf[tcpBufIdx++] = c;
+      }
+    } else {
+      parseSdChar(c);
     }
   }
 }
